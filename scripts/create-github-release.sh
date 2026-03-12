@@ -55,9 +55,9 @@ Aegis Secret $VERSION is the first public binary release.
 
 What's included:
 - Notarized macOS installer package
-- Signed app bundle with Touch ID-gated secret access
-- Local MCP broker for policy-based HTTP access without exposing raw secrets to the LLM
-- CLI for storing secrets and managing policies
+- Signed app bundle with Touch ID-gated command access
+- Local MCP server for running wrapped commands without shelling out through the agent
+- CLI for storing secrets and managing wrapped commands
 
 Install:
 1. Download \`Aegis.Secret-$VERSION-installer.pkg\`

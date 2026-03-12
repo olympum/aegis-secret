@@ -4,7 +4,7 @@ import Security
 
 public let aegisSecretServiceName = "Aegis Secrets"
 public let aegisSecretMetadataServiceName = "Aegis Secrets Metadata"
-public let policiesFileEnvironmentKey = "AEGIS_SECRET_POLICIES_FILE"
+public let commandsFileEnvironmentKey = "AEGIS_SECRET_COMMANDS_FILE"
 
 public enum ExitCode: Int32 {
     case success = 0
@@ -184,9 +184,7 @@ public struct KeychainSecretStore: SecretStore {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
-        case errSecSuccess:
-            return true
-        case errSecInteractionNotAllowed:
+        case errSecSuccess, errSecInteractionNotAllowed:
             return true
         case errSecItemNotFound:
             return false
@@ -253,9 +251,7 @@ public struct KeychainSecretStore: SecretStore {
             return dictionaries.compactMap { dictionary in
                 (dictionary[kSecAttrAccount as String] as? String).map(SecretListItem.init(key:))
             }
-        case errSecItemNotFound:
-            return []
-        case errSecInteractionNotAllowed:
+        case errSecItemNotFound, errSecInteractionNotAllowed:
             return []
         default:
             throw AegisSecretError.runtime("Unable to list secrets: \(message(for: status)).")
@@ -281,190 +277,241 @@ public struct KeychainSecretStore: SecretStore {
     }
 }
 
-public enum AuthMode: String, Codable, Sendable {
-    case bearer
-    case header
-}
-
-public struct PolicyConfig: Codable, Equatable, Sendable {
+public struct WrappedCommandConfig: Codable, Equatable, Sendable {
     public let name: String
+    public let command: String
     public let description: String?
-    public let secretKey: String
-    public let baseURL: String
-    public let allowedHosts: [String]?
-    public let allowedMethods: [String]
-    public let authMode: AuthMode
-    public let headerName: String?
-    public let headerPrefix: String?
-    public let allowedPathPrefixes: [String]
-    public let defaultHeaders: [String: String]?
+    public let approvalWindowSeconds: Int?
+    public let timeoutSeconds: Int?
+    public let maxOutputBytes: Int?
+    public let denyPrefixes: [[String]]?
+    public let allowPrefixes: [[String]]?
+    public let denyFlags: [String]?
+    public let environment: [String: String]?
 
     public init(
         name: String,
+        command: String,
         description: String? = nil,
-        secretKey: String,
-        baseURL: String,
-        allowedHosts: [String]? = nil,
-        allowedMethods: [String],
-        authMode: AuthMode,
-        headerName: String? = nil,
-        headerPrefix: String? = nil,
-        allowedPathPrefixes: [String],
-        defaultHeaders: [String: String]? = nil
+        approvalWindowSeconds: Int? = nil,
+        timeoutSeconds: Int? = nil,
+        maxOutputBytes: Int? = nil,
+        denyPrefixes: [[String]]? = nil,
+        allowPrefixes: [[String]]? = nil,
+        denyFlags: [String]? = nil,
+        environment: [String: String]? = nil
     ) {
         self.name = name
+        self.command = command
         self.description = description
-        self.secretKey = secretKey
-        self.baseURL = baseURL
-        self.allowedHosts = allowedHosts
-        self.allowedMethods = allowedMethods
-        self.authMode = authMode
-        self.headerName = headerName
-        self.headerPrefix = headerPrefix
-        self.allowedPathPrefixes = allowedPathPrefixes
-        self.defaultHeaders = defaultHeaders
+        self.approvalWindowSeconds = approvalWindowSeconds
+        self.timeoutSeconds = timeoutSeconds
+        self.maxOutputBytes = maxOutputBytes
+        self.denyPrefixes = denyPrefixes
+        self.allowPrefixes = allowPrefixes
+        self.denyFlags = denyFlags
+        self.environment = environment
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
+        case command
         case description
-        case secretKey = "secret_key"
-        case baseURL = "base_url"
-        case allowedHosts = "allowed_hosts"
-        case allowedMethods = "allowed_methods"
-        case authMode = "auth_mode"
-        case headerName = "header_name"
-        case headerPrefix = "header_prefix"
-        case allowedPathPrefixes = "allowed_path_prefixes"
-        case defaultHeaders = "default_headers"
+        case approvalWindowSeconds = "approval_window_seconds"
+        case timeoutSeconds = "timeout_seconds"
+        case maxOutputBytes = "max_output_bytes"
+        case denyPrefixes = "deny_prefixes"
+        case allowPrefixes = "allow_prefixes"
+        case denyFlags = "deny_flags"
+        case environment
     }
 
-    public func resolved() throws -> ResolvedPolicy {
+    public func resolved() throws -> ResolvedWrappedCommand {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
-            throw AegisSecretError.runtime("Policy names cannot be empty.")
+            throw AegisSecretError.runtime("Wrapped command names cannot be empty.")
         }
 
-        let trimmedSecretKey = secretKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSecretKey.isEmpty else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` is missing `secret_key`.")
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCommand.isEmpty else {
+            throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` is missing `command`.")
         }
 
-        guard let baseURL = URL(string: baseURL), let scheme = baseURL.scheme?.lowercased(), let host = baseURL.host?.lowercased() else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` has an invalid `base_url`.")
+        guard !(denyPrefixes?.isEmpty == false && allowPrefixes?.isEmpty == false) else {
+            throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` cannot define both `deny_prefixes` and `allow_prefixes`.")
         }
 
-        guard scheme == "https" || scheme == "http" else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` must use http or https.")
+        let resolvedApprovalWindow = approvalWindowSeconds ?? 300
+        guard resolvedApprovalWindow >= 0 else {
+            throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` has an invalid `approval_window_seconds`.")
         }
 
-        let hosts = Set((allowedHosts ?? [host]).map { $0.lowercased() })
-        guard !hosts.isEmpty else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` must allow at least one host.")
+        let resolvedTimeout = timeoutSeconds ?? 30
+        guard resolvedTimeout > 0 else {
+            throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` has an invalid `timeout_seconds`.")
         }
 
-        let methods = Set(allowedMethods.map { $0.uppercased() })
-        let validMethods = Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
-        guard !methods.isEmpty, methods.isSubset(of: validMethods) else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` has invalid `allowed_methods`.")
+        let resolvedMaxOutputBytes = maxOutputBytes ?? 256 * 1024
+        guard resolvedMaxOutputBytes > 0 else {
+            throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` has an invalid `max_output_bytes`.")
         }
 
-        let pathPrefixes = allowedPathPrefixes.map { normalizePathPrefix($0) }
-        guard !pathPrefixes.isEmpty else {
-            throw AegisSecretError.runtime("Policy `\(trimmedName)` must declare `allowed_path_prefixes`.")
-        }
+        let normalizedDenyPrefixes = try normalizePrefixes(denyPrefixes, name: trimmedName, field: "deny_prefixes")
+        let normalizedAllowPrefixes = try normalizePrefixes(allowPrefixes, name: trimmedName, field: "allow_prefixes")
+        let normalizedFlags = try normalizeFlags(denyFlags, name: trimmedName)
+        let normalizedEnvironment = try normalizeEnvironment(environment, name: trimmedName)
 
-        let resolvedHeaderName: String
-        let resolvedHeaderPrefix: String
-        switch authMode {
-        case .bearer:
-            resolvedHeaderName = (headerName?.trimmedNonEmpty) ?? "Authorization"
-            resolvedHeaderPrefix = headerPrefix ?? "Bearer "
-        case .header:
-            guard let headerName = headerName?.trimmedNonEmpty else {
-                throw AegisSecretError.runtime("Policy `\(trimmedName)` with `header` auth_mode requires `header_name`.")
-            }
-            resolvedHeaderName = headerName
-            resolvedHeaderPrefix = headerPrefix ?? ""
-        }
-
-        let normalizedHeaders = Dictionary(uniqueKeysWithValues: (defaultHeaders ?? [:]).map { key, value in
-            (key, value)
-        })
-
-        return ResolvedPolicy(
+        return ResolvedWrappedCommand(
             name: trimmedName,
-            description: description,
-            secretKey: trimmedSecretKey,
-            baseURL: baseURL,
-            allowedHosts: hosts,
-            allowedMethods: methods,
-            authMode: authMode,
-            authHeaderName: resolvedHeaderName,
-            authHeaderPrefix: resolvedHeaderPrefix,
-            allowedPathPrefixes: pathPrefixes,
-            defaultHeaders: normalizedHeaders
+            command: trimmedCommand,
+            description: description?.trimmedNonEmpty,
+            approvalWindowSeconds: resolvedApprovalWindow,
+            timeoutSeconds: resolvedTimeout,
+            maxOutputBytes: resolvedMaxOutputBytes,
+            denyPrefixes: normalizedDenyPrefixes,
+            allowPrefixes: normalizedAllowPrefixes,
+            denyFlags: normalizedFlags,
+            environment: normalizedEnvironment
+        )
+    }
+
+    private func normalizePrefixes(
+        _ prefixes: [[String]]?,
+        name: String,
+        field: String
+    ) throws -> [[String]] {
+        guard let prefixes else {
+            return []
+        }
+
+        return try prefixes.map { prefix in
+            let normalized = prefix.compactMap { value in
+                value.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            }
+            guard !normalized.isEmpty else {
+                throw AegisSecretError.runtime("Wrapped command `\(name)` contains an empty prefix in `\(field)`.")
+            }
+            return normalized
+        }
+    }
+
+    private func normalizeFlags(_ flags: [String]?, name: String) throws -> Set<String> {
+        let normalized = Set((flags ?? []).compactMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        })
+        if normalized.contains(where: { !$0.hasPrefix("-") }) {
+            throw AegisSecretError.runtime("Wrapped command `\(name)` has an invalid `deny_flags` entry.")
+        }
+        return normalized
+    }
+
+    private func normalizeEnvironment(_ environment: [String: String]?, name: String) throws -> [String: String] {
+        let environment = environment ?? [:]
+        for key in environment.keys {
+            if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw AegisSecretError.runtime("Wrapped command `\(name)` has an empty environment variable name.")
+            }
+        }
+        return environment
+    }
+}
+
+public struct CommandFile: Codable, Equatable, Sendable {
+    public let version: Int
+    public let commands: [WrappedCommandConfig]
+
+    public init(version: Int = 1, commands: [WrappedCommandConfig]) {
+        self.version = version
+        self.commands = commands
+    }
+
+    public static func defaultTemplate() -> CommandFile {
+        CommandFile(
+            version: 1,
+            commands: [
+                WrappedCommandConfig(
+                    name: "gh",
+                    command: "gh",
+                    description: "GitHub CLI",
+                    denyPrefixes: [["auth"], ["alias"], ["extension"]],
+                    denyFlags: ["--hostname"]
+                ),
+                WrappedCommandConfig(
+                    name: "aws",
+                    command: "aws",
+                    description: "AWS CLI",
+                    denyPrefixes: [
+                        ["configure"],
+                        ["sts", "assume-role"],
+                        ["sts", "assume-role-with-saml"],
+                        ["sts", "assume-role-with-web-identity"],
+                        ["sts", "get-session-token"],
+                        ["sts", "get-federation-token"],
+                        ["ecr", "get-login-password"],
+                        ["rds", "generate-db-auth-token"],
+                        ["codeartifact", "get-authorization-token"],
+                        ["eks", "get-token"]
+                    ],
+                    denyFlags: ["--debug"]
+                ),
+                WrappedCommandConfig(
+                    name: "gcloud",
+                    command: "gcloud",
+                    description: "Google Cloud CLI",
+                    denyPrefixes: [["auth"], ["config", "config-helper"]],
+                    denyFlags: ["--account", "--access-token-file"]
+                ),
+            ]
         )
     }
 }
 
-public struct PolicyFile: Codable, Equatable, Sendable {
-    public let policies: [PolicyConfig]
-
-    public init(policies: [PolicyConfig]) {
-        self.policies = policies
-    }
-}
-
-public struct PolicySummary: Codable, Equatable, Sendable {
+public struct WrappedCommandSummary: Codable, Equatable, Sendable {
     public let name: String
     public let description: String?
-    public let baseURL: String
-    public let allowedMethods: [String]
-    public let allowedPathPrefixes: [String]
+    public let command: String
+    public let approvalWindowSeconds: Int
+    public let executableResolves: Bool
 
-    public init(name: String, description: String?, baseURL: String, allowedMethods: [String], allowedPathPrefixes: [String]) {
+    public init(name: String, description: String?, command: String, approvalWindowSeconds: Int, executableResolves: Bool) {
         self.name = name
         self.description = description
-        self.baseURL = baseURL
-        self.allowedMethods = allowedMethods
-        self.allowedPathPrefixes = allowedPathPrefixes
+        self.command = command
+        self.approvalWindowSeconds = approvalWindowSeconds
+        self.executableResolves = executableResolves
     }
 }
 
-public struct ResolvedPolicy: Equatable, Sendable {
+public struct ResolvedWrappedCommand: Equatable, Sendable {
     public let name: String
+    public let command: String
     public let description: String?
-    public let secretKey: String
-    public let baseURL: URL
-    public let allowedHosts: Set<String>
-    public let allowedMethods: Set<String>
-    public let authMode: AuthMode
-    public let authHeaderName: String
-    public let authHeaderPrefix: String
-    public let allowedPathPrefixes: [String]
-    public let defaultHeaders: [String: String]
+    public let approvalWindowSeconds: Int
+    public let timeoutSeconds: Int
+    public let maxOutputBytes: Int
+    public let denyPrefixes: [[String]]
+    public let allowPrefixes: [[String]]
+    public let denyFlags: Set<String>
+    public let environment: [String: String]
 }
 
-public struct PolicyProbeResult: Codable, Equatable, Sendable {
-    public let ok: Bool
-    public let description: String
-
-    public init(ok: Bool, description: String) {
-        self.ok = ok
-        self.description = description
-    }
-}
-
-public final class PolicyStore: @unchecked Sendable {
+public final class CommandStore: @unchecked Sendable {
     public let fileURL: URL
+    public let environment: [String: String]
+    public let fileManager: FileManager
 
-    public init(fileURL: URL = PolicyStore.defaultURL()) {
+    public init(
+        fileURL: URL = CommandStore.defaultURL(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) {
         self.fileURL = fileURL
+        self.environment = environment
+        self.fileManager = fileManager
     }
 
     public static func defaultURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
-        if let override = environment[policiesFileEnvironmentKey]?.trimmedNonEmpty {
+        if let override = environment[commandsFileEnvironmentKey]?.trimmedNonEmpty {
             return URL(fileURLWithPath: expandUserPath(override))
         }
 
@@ -472,286 +519,441 @@ public final class PolicyStore: @unchecked Sendable {
         return homeDirectory
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("aegis-secret", isDirectory: true)
-            .appendingPathComponent("policies.json", isDirectory: false)
+            .appendingPathComponent("commands.json", isDirectory: false)
     }
 
-    public func rawFile(optionalIfMissing: Bool = true) throws -> PolicyFile {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+    public func rawFile(optionalIfMissing: Bool = true) throws -> CommandFile {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
             if optionalIfMissing {
-                return PolicyFile(policies: [])
+                return CommandFile.defaultTemplate()
             }
-            throw AegisSecretError.runtime("Policies file not found at `\(fileURL.path)`.")
+            throw AegisSecretError.runtime("Commands file not found at `\(fileURL.path)`.")
         }
 
         let data = try Data(contentsOf: fileURL)
-        return try JSONDecoder().decode(PolicyFile.self, from: data)
+        return try JSONDecoder().decode(CommandFile.self, from: data)
     }
 
-    public func resolvedPolicies(optionalIfMissing: Bool = true) throws -> [ResolvedPolicy] {
+    public func resolvedCommands(optionalIfMissing: Bool = true) throws -> [ResolvedWrappedCommand] {
         let file = try rawFile(optionalIfMissing: optionalIfMissing)
-        let resolved = try file.policies.map { try $0.resolved() }
+        guard file.version == 1 else {
+            throw AegisSecretError.runtime("Unsupported commands file version `\(file.version)`.")
+        }
 
+        let resolved = try file.commands.map { try $0.resolved() }
         let names = resolved.map(\.name)
-        if Set(names).count != names.count {
-            throw AegisSecretError.runtime("Policies file contains duplicate policy names.")
+        guard Set(names).count == names.count else {
+            throw AegisSecretError.runtime("Commands file contains duplicate wrapped command names.")
         }
 
         return resolved.sorted { $0.name < $1.name }
     }
 
-    public func listPolicies() throws -> [PolicySummary] {
-        try resolvedPolicies().map {
-            PolicySummary(
-                name: $0.name,
-                description: $0.description,
-                baseURL: $0.baseURL.absoluteString,
-                allowedMethods: $0.allowedMethods.sorted(),
-                allowedPathPrefixes: $0.allowedPathPrefixes
+    public func listCommands() throws -> [WrappedCommandSummary] {
+        try resolvedCommands().map { command in
+            WrappedCommandSummary(
+                name: command.name,
+                description: command.description,
+                command: command.command,
+                approvalWindowSeconds: command.approvalWindowSeconds,
+                executableResolves: resolveExecutable(named: command.command) != nil
             )
         }
     }
 
-    public func rawPolicy(named name: String) throws -> PolicyConfig {
+    public func rawCommand(named name: String) throws -> WrappedCommandConfig {
         let file = try rawFile(optionalIfMissing: false)
-        guard let policy = file.policies.first(where: { $0.name == name }) else {
-            throw AegisSecretError.runtime("Policy `\(name)` was not found.")
+        guard let command = file.commands.first(where: { $0.name == name }) else {
+            throw AegisSecretError.runtime("Wrapped command `\(name)` was not found.")
         }
-        return policy
+        return command
     }
 
-    public func resolvedPolicy(named name: String) throws -> ResolvedPolicy {
-        guard let policy = try resolvedPolicies(optionalIfMissing: false).first(where: { $0.name == name }) else {
-            throw AegisSecretError.runtime("Policy `\(name)` was not found.")
+    public func resolvedCommand(named name: String) throws -> ResolvedWrappedCommand {
+        guard let command = try resolvedCommands(optionalIfMissing: false).first(where: { $0.name == name }) else {
+            throw AegisSecretError.runtime("Wrapped command `\(name)` was not found.")
         }
-        return policy
+        return command
     }
 
     @discardableResult
     public func importFile(from sourcePath: String) throws -> Int {
         let sourceURL = URL(fileURLWithPath: expandUserPath(sourcePath))
         let data = try Data(contentsOf: sourceURL)
-        let file = try JSONDecoder().decode(PolicyFile.self, from: data)
-        _ = try file.policies.map { try $0.resolved() }
+        let file = try JSONDecoder().decode(CommandFile.self, from: data)
+        guard file.version == 1 else {
+            throw AegisSecretError.runtime("Unsupported commands file version `\(file.version)`.")
+        }
+        _ = try file.commands.map { try $0.resolved() }
 
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
-        return file.policies.count
+        return file.commands.count
     }
 
     public func validateCurrentConfiguration() throws -> Int {
-        try resolvedPolicies(optionalIfMissing: false).count
+        try resolvedCommands(optionalIfMissing: false).count
     }
 
-    public func validateCurrentPolicy(named name: String) throws {
-        _ = try resolvedPolicy(named: name)
+    public func validateCurrentCommand(named name: String) throws {
+        _ = try resolvedCommand(named: name)
     }
 
     public func validateFile(at path: String) throws -> Int {
         let url = URL(fileURLWithPath: expandUserPath(path))
         let data = try Data(contentsOf: url)
-        let file = try JSONDecoder().decode(PolicyFile.self, from: data)
-        _ = try file.policies.map { try $0.resolved() }
-        return file.policies.count
+        let file = try JSONDecoder().decode(CommandFile.self, from: data)
+        guard file.version == 1 else {
+            throw AegisSecretError.runtime("Unsupported commands file version `\(file.version)`.")
+        }
+        _ = try file.commands.map { try $0.resolved() }
+        return file.commands.count
+    }
+
+    public func writeDefaultFileIfMissing() throws {
+        guard !fileManager.fileExists(atPath: fileURL.path) else {
+            return
+        }
+
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try prettyJSON(CommandFile.defaultTemplate()).write(to: fileURL, options: .atomic)
+    }
+
+    public func resolveExecutable(named executableName: String) -> URL? {
+        if executableName.contains("/") {
+            let url = URL(fileURLWithPath: expandUserPath(executableName))
+            return fileManager.isExecutableFile(atPath: url.path) ? url : nil
+        }
+
+        guard let path = environment["PATH"] else {
+            return nil
+        }
+
+        for component in path.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(component), isDirectory: true)
+                .appendingPathComponent(executableName)
+            if fileManager.isExecutableFile(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 }
 
-public struct BrokerRequest: Equatable, Sendable {
-    public let method: String
-    public let path: String?
-    public let url: String?
-    public let headers: [String: String]
-    public let bodyData: Data?
-    public let bodyIsStructuredJSON: Bool
+public actor ApprovalCache {
+    private var expirations: [String: Date] = [:]
+
+    public init() {}
+
+    public func authorize(
+        key: String,
+        windowSeconds: Int,
+        reason: String,
+        authenticator: DeviceAuthenticator
+    ) async throws {
+        let now = Date()
+        if let expiration = expirations[key], expiration > now {
+            return
+        }
+
+        try await authenticator.authenticate(reason: reason)
+
+        if windowSeconds > 0 {
+            expirations[key] = now.addingTimeInterval(TimeInterval(windowSeconds))
+        } else {
+            expirations.removeValue(forKey: key)
+        }
+    }
+}
+
+public struct CommandExecutionRequest: Sendable {
+    public let executableURL: URL
+    public let arguments: [String]
+    public let environment: [String: String]
+    public let currentDirectoryURL: URL?
+    public let timeoutSeconds: Int
+    public let maxOutputBytes: Int
 
     public init(
-        method: String,
-        path: String? = nil,
-        url: String? = nil,
-        headers: [String: String] = [:],
-        bodyData: Data? = nil,
-        bodyIsStructuredJSON: Bool = false
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        currentDirectoryURL: URL?,
+        timeoutSeconds: Int,
+        maxOutputBytes: Int
     ) {
-        self.method = method
-        self.path = path
-        self.url = url
-        self.headers = headers
-        self.bodyData = bodyData
-        self.bodyIsStructuredJSON = bodyIsStructuredJSON
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.environment = environment
+        self.currentDirectoryURL = currentDirectoryURL
+        self.timeoutSeconds = timeoutSeconds
+        self.maxOutputBytes = maxOutputBytes
     }
 }
 
-public struct BrokerResponse: Codable, Equatable, Sendable {
-    public let status: Int
-    public let headers: [String: String]
-    public let body: String?
-    public let bodyBase64: String?
-    public let mimeType: String?
-    public let truncated: Bool
+public struct RawCommandExecutionResult: Sendable {
+    public let stdout: Data
+    public let stderr: Data
+    public let exitCode: Int32
 
-    public init(status: Int, headers: [String: String], body: String?, bodyBase64: String?, mimeType: String?, truncated: Bool) {
-        self.status = status
-        self.headers = headers
-        self.body = body
-        self.bodyBase64 = bodyBase64
-        self.mimeType = mimeType
-        self.truncated = truncated
+    public init(stdout: Data, stderr: Data, exitCode: Int32) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exitCode = exitCode
     }
 }
 
-public protocol HTTPSession: Sendable {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+public protocol CommandExecutor: Sendable {
+    func execute(_ request: CommandExecutionRequest) async throws -> RawCommandExecutionResult
 }
 
-extension URLSession: HTTPSession {}
+public final class ProcessCommandExecutor: CommandExecutor, @unchecked Sendable {
+    public init() {}
 
-public struct HTTPPolicyBroker: Sendable {
-    public let policyStore: PolicyStore
-    public let secretStore: SecretStore
-    public let session: HTTPSession
-    public let maxResponseBytes: Int
+    public func execute(_ request: CommandExecutionRequest) async throws -> RawCommandExecutionResult {
+        let process = Process()
+        process.executableURL = request.executableURL
+        process.arguments = request.arguments
+        process.environment = request.environment
+        process.currentDirectoryURL = request.currentDirectoryURL
+        process.standardInput = FileHandle.nullDevice
 
-    public init(
-        policyStore: PolicyStore,
-        secretStore: SecretStore,
-        session: HTTPSession = URLSession.shared,
-        maxResponseBytes: Int = 256 * 1024
-    ) {
-        self.policyStore = policyStore
-        self.secretStore = secretStore
-        self.session = session
-        self.maxResponseBytes = maxResponseBytes
-    }
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
-    public func probe(policy name: String) throws -> PolicyProbeResult {
-        let policy = try policyStore.resolvedPolicy(named: name)
-        if try secretStore.secretExists(for: policy.secretKey) {
-            return PolicyProbeResult(ok: true, description: policy.description ?? "Policy is ready.")
-        }
-        return PolicyProbeResult(ok: false, description: "The Keychain secret `\(policy.secretKey)` is missing.")
-    }
+        try process.run()
 
-    public func request(policy name: String, request: BrokerRequest, requester: String? = nil) async throws -> BrokerResponse {
-        let policy = try policyStore.resolvedPolicy(named: name)
-
-        let method = request.method.uppercased()
-        guard policy.allowedMethods.contains(method) else {
-            throw AegisSecretError.runtime("Method `\(method)` is not allowed for policy `\(policy.name)`.")
-        }
-
-        let requestURL = try resolvedURL(for: policy, request: request)
-        guard let host = requestURL.host?.lowercased(), policy.allowedHosts.contains(host) else {
-            throw AegisSecretError.runtime("Host `\(requestURL.host ?? requestURL.absoluteString)` is not allowed for policy `\(policy.name)`.")
-        }
-
-        guard policy.allowedPathPrefixes.contains(where: { matches(path: requestURL.path, allowedPrefix: $0) }) else {
-            throw AegisSecretError.runtime("Path `\(requestURL.path)` is not allowed for policy `\(policy.name)`.")
-        }
-
-        let protectedHeaderNames = protectedHeaders(for: policy)
-        let userHeaders = try validatedUserHeaders(request.headers, protectedHeaderNames: protectedHeaderNames)
-        let reason = "Allow \(requester ?? "the local policy broker") to use policy '\(policy.name)' for \(method) \(requestURL.path)."
-        let secret = try secretStore.readSecret(for: policy.secretKey, reason: reason)
-        guard let secretString = String(data: secret, encoding: .utf8) else {
-            throw AegisSecretError.runtime("Secret `\(policy.secretKey)` is not valid UTF-8 and cannot be used for HTTP authentication.")
-        }
-
-        var urlRequest = URLRequest(url: requestURL)
-        urlRequest.httpMethod = method
-        for (key, value) in policy.defaultHeaders {
-            urlRequest.setValue(value, forHTTPHeaderField: key)
-        }
-        for (key, value) in userHeaders {
-            urlRequest.setValue(value, forHTTPHeaderField: key)
-        }
-        urlRequest.setValue("\(policy.authHeaderPrefix)\(secretString)", forHTTPHeaderField: policy.authHeaderName)
-
-        if let bodyData = request.bodyData {
-            urlRequest.httpBody = bodyData
-            if request.bodyIsStructuredJSON, urlRequest.value(forHTTPHeaderField: "Content-Type") == nil {
-                urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            }
-        }
-
-        let (data, response) = try await session.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AegisSecretError.runtime("Policy request did not return an HTTP response.")
-        }
-
-        return brokerResponse(from: httpResponse, data: data, protectedHeaderNames: protectedHeaderNames)
-    }
-
-    private func resolvedURL(for policy: ResolvedPolicy, request: BrokerRequest) throws -> URL {
-        if let rawURL = request.url?.trimmedNonEmpty {
-            guard let url = URL(string: rawURL) else {
-                throw AegisSecretError.runtime("The supplied URL is invalid.")
-            }
-            return url
-        }
-
-        let path = request.path?.trimmedNonEmpty ?? policy.baseURL.path
-        guard let url = URL(string: path, relativeTo: policy.baseURL)?.absoluteURL else {
-            throw AegisSecretError.runtime("The supplied path is invalid.")
-        }
-        return url
-    }
-
-    private func validatedUserHeaders(_ headers: [String: String], protectedHeaderNames: Set<String>) throws -> [String: String] {
-        var sanitized: [String: String] = [:]
-        for (key, value) in headers {
-            let normalizedKey = key.lowercased()
-            guard !protectedHeaderNames.contains(normalizedKey) else {
-                throw AegisSecretError.runtime("Header `\(key)` cannot be overridden.")
-            }
-            sanitized[key] = value
-        }
-        return sanitized
-    }
-
-    private func brokerResponse(from response: HTTPURLResponse, data: Data, protectedHeaderNames: Set<String>) -> BrokerResponse {
-        let sanitizedHeaders = response.allHeaderFields.reduce(into: [String: String]()) { partialResult, item in
-            guard let rawKey = item.key as? String else { return }
-            let normalizedKey = rawKey.lowercased()
-            guard !protectedHeaderNames.contains(normalizedKey), normalizedKey != "set-cookie" else { return }
-            partialResult[rawKey] = String(describing: item.value)
-        }
-
-        let contentType = response.value(forHTTPHeaderField: "Content-Type")
-        let mimeType = contentType?.split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-
-        let truncated = data.count > maxResponseBytes
-        let effectiveData = truncated ? Data(data.prefix(maxResponseBytes)) : data
-
-        if isTextual(mimeType: mimeType, data: effectiveData), let text = String(data: effectiveData, encoding: .utf8) {
-            return BrokerResponse(
-                status: response.statusCode,
-                headers: sanitizedHeaders,
-                body: text,
-                bodyBase64: nil,
-                mimeType: mimeType,
-                truncated: truncated
+        let stdoutTask = Task {
+            try await readStream(
+                from: stdoutPipe.fileHandleForReading,
+                maxBytes: request.maxOutputBytes,
+                process: process,
+                label: "stdout",
+                commandName: request.executableURL.lastPathComponent
             )
         }
+        let stderrTask = Task {
+            try await readStream(
+                from: stderrPipe.fileHandleForReading,
+                maxBytes: request.maxOutputBytes,
+                process: process,
+                label: "stderr",
+                commandName: request.executableURL.lastPathComponent
+            )
+        }
+        let terminationTask = Task {
+            await waitForTermination(process)
+        }
+        let timeoutTask = Task {
+            try await Task.sleep(for: .seconds(request.timeoutSeconds))
+            if process.isRunning {
+                process.terminate()
+            }
+            throw AegisSecretError.runtime("Command `\(request.executableURL.lastPathComponent)` timed out after \(request.timeoutSeconds) seconds.")
+        }
 
-        return BrokerResponse(
-            status: response.statusCode,
-            headers: sanitizedHeaders,
-            body: nil,
-            bodyBase64: effectiveData.base64EncodedString(),
-            mimeType: mimeType,
-            truncated: truncated
+        let exitCode = await terminationTask.value
+        timeoutTask.cancel()
+
+        let stdout = try await stdoutTask.value
+        let stderr = try await stderrTask.value
+        _ = try? await timeoutTask.value
+
+        return RawCommandExecutionResult(stdout: stdout, stderr: stderr, exitCode: exitCode)
+    }
+
+    private func readStream(
+        from handle: FileHandle,
+        maxBytes: Int,
+        process: Process,
+        label: String,
+        commandName: String
+    ) async throws -> Data {
+        var data = Data()
+        for try await byte in handle.bytes {
+            if data.count >= maxBytes {
+                if process.isRunning {
+                    process.terminate()
+                }
+                throw AegisSecretError.runtime("Command `\(commandName)` exceeded the \(maxBytes)-byte \(label) limit.")
+            }
+            data.append(byte)
+        }
+        return data
+    }
+
+    private func waitForTermination(_ process: Process) async -> Int32 {
+        while process.isRunning {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return process.terminationStatus
+    }
+}
+
+public struct WrappedCommandInvocationResult: Codable, Equatable, Sendable {
+    public let exitCode: Int32
+    public let stdout: String
+    public let stderr: String
+    public let stdoutJSON: JSONValue?
+    public let stdoutTruncated: Bool
+    public let stderrTruncated: Bool
+
+    public init(
+        exitCode: Int32,
+        stdout: String,
+        stderr: String,
+        stdoutJSON: JSONValue?,
+        stdoutTruncated: Bool,
+        stderrTruncated: Bool
+    ) {
+        self.exitCode = exitCode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdoutJSON = stdoutJSON
+        self.stdoutTruncated = stdoutTruncated
+        self.stderrTruncated = stderrTruncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case exitCode = "exit_code"
+        case stdout
+        case stderr
+        case stdoutJSON = "stdout_json"
+        case stdoutTruncated = "stdout_truncated"
+        case stderrTruncated = "stderr_truncated"
+    }
+}
+
+public struct WrappedCommandRunner: Sendable {
+    public let commandStore: CommandStore
+    public let authenticator: DeviceAuthenticator
+    public let approvalCache: ApprovalCache
+    public let executor: CommandExecutor
+    public let environment: [String: String]
+
+    public init(
+        commandStore: CommandStore = CommandStore(),
+        authenticator: DeviceAuthenticator = LocalDeviceAuthenticator(),
+        approvalCache: ApprovalCache = ApprovalCache(),
+        executor: CommandExecutor = ProcessCommandExecutor(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.commandStore = commandStore
+        self.authenticator = authenticator
+        self.approvalCache = approvalCache
+        self.executor = executor
+        self.environment = environment
+    }
+
+    public func run(
+        name: String,
+        args: [String],
+        cwd: String? = nil,
+        requester: String? = nil
+    ) async throws -> WrappedCommandInvocationResult {
+        let wrappedCommand = try commandStore.resolvedCommand(named: name)
+        try validate(args: args, for: wrappedCommand)
+
+        guard let executableURL = commandStore.resolveExecutable(named: wrappedCommand.command) else {
+            throw AegisSecretError.runtime("Wrapped command `\(wrappedCommand.name)` points to `\(wrappedCommand.command)`, which is not executable on PATH.")
+        }
+
+        let workingDirectoryURL = try resolveWorkingDirectory(cwd)
+        let requesterLabel = requester?.trimmedNonEmpty ?? "the local agent"
+        let reason = "Allow \(requesterLabel) to run wrapped command '\(wrappedCommand.name)'."
+        try await approvalCache.authorize(
+            key: wrappedCommand.name,
+            windowSeconds: wrappedCommand.approvalWindowSeconds,
+            reason: reason,
+            authenticator: authenticator
+        )
+
+        var executionEnvironment = environment
+        for (key, value) in wrappedCommand.environment {
+            executionEnvironment[key] = value
+        }
+
+        let rawResult = try await executor.execute(
+            CommandExecutionRequest(
+                executableURL: executableURL,
+                arguments: args,
+                environment: executionEnvironment,
+                currentDirectoryURL: workingDirectoryURL,
+                timeoutSeconds: wrappedCommand.timeoutSeconds,
+                maxOutputBytes: wrappedCommand.maxOutputBytes
+            )
+        )
+
+        let stdout = String(decoding: rawResult.stdout, as: UTF8.self)
+        let stderr = String(decoding: rawResult.stderr, as: UTF8.self)
+        let stdoutJSON = try decodeJSONIfPresent(rawResult.stdout)
+
+        return WrappedCommandInvocationResult(
+            exitCode: rawResult.exitCode,
+            stdout: stdout,
+            stderr: stderr,
+            stdoutJSON: stdoutJSON,
+            stdoutTruncated: false,
+            stderrTruncated: false
         )
     }
 
-    private func protectedHeaders(for policy: ResolvedPolicy) -> Set<String> {
-        var headers: Set<String> = [
-            "authorization",
-            "proxy-authorization",
-            "cookie",
-            "x-api-key"
-        ]
-        headers.insert(policy.authHeaderName.lowercased())
-        return headers
+    private func validate(args: [String], for command: ResolvedWrappedCommand) throws {
+        for argument in args {
+            if command.denyFlags.contains(argument) || command.denyFlags.contains(where: { argument.hasPrefix("\($0)=") }) {
+                throw AegisSecretError.runtime("Flag `\(argument)` is not allowed for wrapped command `\(command.name)`.")
+            }
+        }
+
+        if !command.allowPrefixes.isEmpty && !command.allowPrefixes.contains(where: { matchesPrefix(args, prefix: $0) }) {
+            throw AegisSecretError.runtime("Arguments are not allowed for wrapped command `\(command.name)`.")
+        }
+
+        if let matchedPrefix = command.denyPrefixes.first(where: { matchesPrefix(args, prefix: $0) }) {
+            let renderedPrefix = matchedPrefix.joined(separator: " ")
+            throw AegisSecretError.runtime("The `\(renderedPrefix)` subcommand is not allowed for wrapped command `\(command.name)`.")
+        }
     }
+
+    private func resolveWorkingDirectory(_ cwd: String?) throws -> URL? {
+        guard let cwd = cwd?.trimmedNonEmpty else {
+            return nil
+        }
+
+        let expanded = expandUserPath(cwd)
+        guard expanded.hasPrefix("/") else {
+            throw AegisSecretError.runtime("Working directory must be an absolute path.")
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw AegisSecretError.runtime("Working directory `\(expanded)` does not exist.")
+        }
+
+        return URL(fileURLWithPath: expanded, isDirectory: true)
+    }
+
+    private func decodeJSONIfPresent(_ data: Data) throws -> JSONValue? {
+        guard let text = String(data: data, encoding: .utf8)?.trimmedNonEmpty else {
+            return nil
+        }
+
+        let trimmedData = Data(text.utf8)
+        do {
+            return try JSONDecoder().decode(JSONValue.self, from: trimmedData)
+        } catch {
+            return nil
+        }
+    }
+}
+
+private func matchesPrefix(_ args: [String], prefix: [String]) -> Bool {
+    guard !prefix.isEmpty, args.count >= prefix.count else {
+        return false
+    }
+    return Array(args.prefix(prefix.count)) == prefix
 }
 
 public enum SecretInputMode: Equatable {
@@ -759,7 +961,7 @@ public enum SecretInputMode: Equatable {
     case stdin
 }
 
-public enum PolicyCommand: Equatable {
+public enum WrappedCommandManagementCommand: Equatable {
     case list
     case show(name: String)
     case validateCurrent(name: String?)
@@ -767,20 +969,21 @@ public enum PolicyCommand: Equatable {
     case importFile(path: String)
 }
 
-public enum Command: Equatable {
+public enum CLICommand: Equatable {
     case set(key: String, inputMode: SecretInputMode)
     case get(key: String, agentName: String)
     case delete(key: String)
     case list
     case installUser
-    case policy(PolicyCommand)
+    case command(WrappedCommandManagementCommand)
+    case run(name: String, args: [String])
     case help
 }
 
 public struct CommandParser {
     public init() {}
 
-    public func parse(_ arguments: [String], stdinIsTTY: Bool) throws -> Command {
+    public func parse(_ arguments: [String], stdinIsTTY: Bool) throws -> CLICommand {
         guard let command = arguments.first else {
             return .help
         }
@@ -802,8 +1005,10 @@ public struct CommandParser {
                 throw AegisSecretError.usage("`install-user` does not accept additional arguments.")
             }
             return .installUser
-        case "policy":
-            return try parsePolicy(Array(arguments.dropFirst()))
+        case "command":
+            return try parseCommand(Array(arguments.dropFirst()))
+        case "run":
+            return try parseRun(Array(arguments.dropFirst()))
         case "help", "--help", "-h":
             return .help
         default:
@@ -811,7 +1016,7 @@ public struct CommandParser {
         }
     }
 
-    private func parseSet(_ arguments: [String], stdinIsTTY: Bool) throws -> Command {
+    private func parseSet(_ arguments: [String], stdinIsTTY: Bool) throws -> CLICommand {
         guard let key = arguments.first, !key.hasPrefix("-") else {
             throw AegisSecretError.usage("`set` requires a secret key.")
         }
@@ -832,7 +1037,7 @@ public struct CommandParser {
         return .set(key: key, inputMode: useStdin ? .stdin : .prompt)
     }
 
-    private func parseGet(_ arguments: [String]) throws -> Command {
+    private func parseGet(_ arguments: [String]) throws -> CLICommand {
         guard let key = arguments.first, !key.hasPrefix("-") else {
             throw AegisSecretError.usage("`get` requires a secret key.")
         }
@@ -860,49 +1065,62 @@ public struct CommandParser {
         return .get(key: key, agentName: agentName)
     }
 
-    private func parseDelete(_ arguments: [String]) throws -> Command {
+    private func parseDelete(_ arguments: [String]) throws -> CLICommand {
         guard arguments.count == 1, let key = arguments.first, !key.hasPrefix("-") else {
             throw AegisSecretError.usage("`delete` requires exactly one secret key.")
         }
         return .delete(key: key)
     }
 
-    private func parsePolicy(_ arguments: [String]) throws -> Command {
+    private func parseCommand(_ arguments: [String]) throws -> CLICommand {
         guard let subcommand = arguments.first else {
-            throw AegisSecretError.usage("`policy` requires a subcommand.")
+            throw AegisSecretError.usage("`command` requires a subcommand.")
         }
 
         let remaining = Array(arguments.dropFirst())
         switch subcommand {
         case "list":
             guard remaining.isEmpty else {
-                throw AegisSecretError.usage("`policy list` does not accept additional arguments.")
+                throw AegisSecretError.usage("`command list` does not accept additional arguments.")
             }
-            return .policy(.list)
+            return .command(.list)
         case "show":
             guard remaining.count == 1 else {
-                throw AegisSecretError.usage("`policy show` requires a policy name.")
+                throw AegisSecretError.usage("`command show` requires a wrapped command name.")
             }
-            return .policy(.show(name: remaining[0]))
+            return .command(.show(name: remaining[0]))
         case "validate":
             if remaining.isEmpty {
-                return .policy(.validateCurrent(name: nil))
+                return .command(.validateCurrent(name: nil))
             }
             if remaining.count == 2 && remaining[0] == "--file" {
-                return .policy(.validateFile(path: remaining[1]))
+                return .command(.validateFile(path: remaining[1]))
             }
             if remaining.count == 1, !remaining[0].hasPrefix("-") {
-                return .policy(.validateCurrent(name: remaining[0]))
+                return .command(.validateCurrent(name: remaining[0]))
             }
-            throw AegisSecretError.usage("Usage: `aegis-secret policy validate [<name> | --file <path>]`.")
+            throw AegisSecretError.usage("Usage: `aegis-secret command validate [<name> | --file <path>]`.")
         case "import":
             guard remaining.count == 1 else {
-                throw AegisSecretError.usage("`policy import` requires a JSON file path.")
+                throw AegisSecretError.usage("`command import` requires a JSON file path.")
             }
-            return .policy(.importFile(path: remaining[0]))
+            return .command(.importFile(path: remaining[0]))
         default:
-            throw AegisSecretError.usage("Unknown policy subcommand `\(subcommand)`.")
+            throw AegisSecretError.usage("Unknown command subcommand `\(subcommand)`.")
         }
+    }
+
+    private func parseRun(_ arguments: [String]) throws -> CLICommand {
+        guard let name = arguments.first, !name.hasPrefix("-") else {
+            throw AegisSecretError.usage("`run` requires a wrapped command name.")
+        }
+
+        let remaining = Array(arguments.dropFirst())
+        guard remaining.isEmpty || remaining.first == "--" else {
+            throw AegisSecretError.usage("Usage: `aegis-secret run <name> -- <args...>`.")
+        }
+        let args = remaining.isEmpty ? [] : Array(remaining.dropFirst())
+        return .run(name: name, args: args)
     }
 }
 
@@ -910,18 +1128,24 @@ public struct CLIApplication {
     public let parser: CommandParser
     public let secretStore: SecretStore
     public let authenticator: DeviceAuthenticator
-    public let policyStore: PolicyStore
+    public let commandStore: CommandStore
+    public let wrappedCommandRunner: WrappedCommandRunner
 
     public init(
         parser: CommandParser = CommandParser(),
         secretStore: SecretStore = KeychainSecretStore(),
         authenticator: DeviceAuthenticator = LocalDeviceAuthenticator(),
-        policyStore: PolicyStore = PolicyStore()
+        commandStore: CommandStore = CommandStore(),
+        wrappedCommandRunner: WrappedCommandRunner? = nil
     ) {
         self.parser = parser
         self.secretStore = secretStore
         self.authenticator = authenticator
-        self.policyStore = policyStore
+        self.commandStore = commandStore
+        self.wrappedCommandRunner = wrappedCommandRunner ?? WrappedCommandRunner(
+            commandStore: commandStore,
+            authenticator: authenticator
+        )
     }
 
     public func run(arguments: [String], stdinIsTTY: Bool) async -> Never {
@@ -941,7 +1165,7 @@ public struct CLIApplication {
         }
     }
 
-    private func run(_ command: Command) async throws {
+    private func run(_ command: CLICommand) async throws {
         switch command {
         case .set(let key, let inputMode):
             let secret = try readSecret(using: inputMode)
@@ -971,7 +1195,10 @@ public struct CLIApplication {
                 print(item.key)
             }
         case .installUser:
-            let installation = try UserInstaller(currentExecutablePath: CommandLine.arguments[0]).install()
+            let installation = try UserInstaller(
+                currentExecutablePath: CommandLine.arguments[0],
+                commandStore: commandStore
+            ).install()
             print("Installed user shims for `\(installation.appBundleURL.path)`.")
             if installation.registeredCodex {
                 print("Registered the Codex MCP server.")
@@ -982,36 +1209,51 @@ public struct CLIApplication {
             if !installation.registeredCodex && !installation.registeredClaude {
                 print("No supported MCP client CLI was found, so only PATH shims were created.")
             }
-        case .policy(let policyCommand):
-            try handlePolicyCommand(policyCommand)
+        case .command(let wrappedCommandCommand):
+            try handleWrappedCommandManagement(wrappedCommandCommand)
+        case .run(let name, let args):
+            let result = try await wrappedCommandRunner.run(
+                name: name,
+                args: args,
+                requester: "aegis-secret"
+            )
+            if !result.stdout.isEmpty {
+                FileHandle.standardOutput.write(Data(result.stdout.utf8))
+            }
+            if !result.stderr.isEmpty {
+                FileHandle.standardError.write(Data(result.stderr.utf8))
+            }
+            if result.exitCode != 0 {
+                throw AegisSecretError.runtime("Wrapped command `\(name)` exited with status \(result.exitCode).")
+            }
         case .help:
             print(usageText)
         }
     }
 
-    private func handlePolicyCommand(_ command: PolicyCommand) throws {
+    private func handleWrappedCommandManagement(_ command: WrappedCommandManagementCommand) throws {
         switch command {
         case .list:
-            for summary in try policyStore.listPolicies() {
+            for summary in try commandStore.listCommands() {
                 print(summary.name)
             }
         case .show(let name):
-            let data = try prettyJSON(policyStore.rawPolicy(named: name))
+            let data = try prettyJSON(commandStore.rawCommand(named: name))
             print(String(decoding: data, as: UTF8.self))
         case .validateCurrent(let name):
             if let name {
-                try policyStore.validateCurrentPolicy(named: name)
-                print("Policy `\(name)` is valid.")
+                try commandStore.validateCurrentCommand(named: name)
+                print("Wrapped command `\(name)` is valid.")
             } else {
-                let count = try policyStore.validateCurrentConfiguration()
-                print("Validated \(count) policies from `\(policyStore.fileURL.path)`.")
+                let count = try commandStore.validateCurrentConfiguration()
+                print("Validated \(count) wrapped commands from `\(commandStore.fileURL.path)`.")
             }
         case .validateFile(let path):
-            let count = try policyStore.validateFile(at: path)
-            print("Validated \(count) policies from `\(expandUserPath(path))`.")
+            let count = try commandStore.validateFile(at: path)
+            print("Validated \(count) wrapped commands from `\(expandUserPath(path))`.")
         case .importFile(let path):
-            let count = try policyStore.importFile(from: path)
-            print("Imported \(count) policies into `\(policyStore.fileURL.path)`.")
+            let count = try commandStore.importFile(from: path)
+            print("Imported \(count) wrapped commands into `\(commandStore.fileURL.path)`.")
         }
     }
 
@@ -1055,16 +1297,17 @@ Usage:
   aegis-secret delete <key>
   aegis-secret list
   aegis-secret install-user
-  aegis-secret policy list
-  aegis-secret policy show <name>
-  aegis-secret policy validate [<name> | --file <path>]
-  aegis-secret policy import <json-file>
+  aegis-secret command list
+  aegis-secret command show <name>
+  aegis-secret command validate [<name> | --file <path>]
+  aegis-secret command import <json-file>
+  aegis-secret run <name> -- <args...>
 
 Notes:
   `set` reads from the terminal by default, or from stdin when piped / passed `--stdin`.
   `get` is for explicit human use and reveals the raw secret on stdout after device-owner authentication.
   `install-user` creates PATH shims in `~/.local/bin` and registers user-scoped MCP integrations for installed Codex / Claude CLIs.
-  Policy JSON defaults to `~/.config/aegis-secret/policies.json` unless `AEGIS_SECRET_POLICIES_FILE` is set.
+  Wrapped commands default to `~/.config/aegis-secret/commands.json` unless `AEGIS_SECRET_COMMANDS_FILE` is set.
 """
 
 public struct UserInstallationSummary {
@@ -1077,15 +1320,18 @@ public struct UserInstaller {
     public let currentExecutablePath: String
     public let environment: [String: String]
     public let fileManager: FileManager
+    public let commandStore: CommandStore
 
     public init(
         currentExecutablePath: String,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        commandStore: CommandStore = CommandStore()
     ) {
         self.currentExecutablePath = currentExecutablePath
         self.environment = environment
         self.fileManager = fileManager
+        self.commandStore = commandStore
     }
 
     public func install() throws -> UserInstallationSummary {
@@ -1093,6 +1339,8 @@ public struct UserInstaller {
         guard !appBundleURL.path.hasPrefix("/Volumes/") else {
             throw AegisSecretError.runtime("Run `install-user` after copying Aegis Secret.app to /Applications or ~/Applications.")
         }
+
+        try commandStore.writeDefaultFileIfMissing()
 
         let executableURL = appBundleURL.appendingPathComponent("Contents/MacOS/aegis-secret")
         let binDirectory = fileManager.homeDirectoryForCurrentUser
@@ -1214,18 +1462,7 @@ public struct UserInstaller {
     }
 
     private func findExecutable(named executableName: String) -> URL? {
-        guard let path = environment["PATH"] else {
-            return nil
-        }
-
-        for component in path.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(component), isDirectory: true)
-                .appendingPathComponent(executableName)
-            if fileManager.isExecutableFile(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        return nil
+        commandStore.resolveExecutable(named: executableName)
     }
 
     @discardableResult
@@ -1297,37 +1534,13 @@ public func shellQuote(_ value: String) -> String {
     "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
 }
 
-private func normalizePathPrefix(_ prefix: String) -> String {
-    let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        return "/"
-    }
-    return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
-}
-
-private func matches(path: String, allowedPrefix: String) -> Bool {
-    if allowedPrefix == "/" {
-        return path.hasPrefix("/")
-    }
-    if path == allowedPrefix {
-        return true
-    }
-    return path.hasPrefix("\(allowedPrefix)/")
-}
-
-private func isTextual(mimeType: String?, data: Data) -> Bool {
-    if let mimeType {
-        let lowered = mimeType.lowercased()
-        if lowered.hasPrefix("text/") || lowered.contains("json") || lowered.contains("xml") || lowered.contains("javascript") || lowered.contains("x-www-form-urlencoded") {
-            return true
-        }
-    }
-    return String(data: data, encoding: .utf8) != nil
-}
-
 private extension String {
     var trimmedNonEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

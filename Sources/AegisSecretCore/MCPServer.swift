@@ -59,6 +59,11 @@ public enum JSONValue: Codable, Equatable, Sendable {
         return nil
     }
 
+    public var integerValue: Int? {
+        if case .integer(let value) = self { return value }
+        return nil
+    }
+
     public var objectValue: [String: JSONValue]? {
         if case .object(let value) = self { return value }
         return nil
@@ -124,17 +129,17 @@ private struct ToolCallResult<Payload: Encodable>: Encodable {
 }
 
 public final class StdioMCPServer {
-    private let policyStore: PolicyStore
-    private let secretStore: SecretStore
+    private let commandStore: CommandStore
+    private let runner: WrappedCommandRunner
     private let agentName: String?
 
     public init(
-        policyStore: PolicyStore = PolicyStore(),
-        secretStore: SecretStore = KeychainSecretStore(),
+        commandStore: CommandStore = CommandStore(),
+        runner: WrappedCommandRunner? = nil,
         agentName: String? = ProcessInfo.processInfo.environment["AEGIS_SECRET_AGENT_NAME"]
     ) {
-        self.policyStore = policyStore
-        self.secretStore = secretStore
+        self.commandStore = commandStore
+        self.runner = runner ?? WrappedCommandRunner(commandStore: commandStore)
         self.agentName = agentName
     }
 
@@ -168,7 +173,7 @@ public final class StdioMCPServer {
                         "listChanged": .bool(false),
                     ]),
                 ],
-                serverInfo: ServerInfo(name: "aegis-secret", version: "0.1.0")
+                serverInfo: ServerInfo(name: "aegis-secret", version: "0.2.0")
             )
             try emit(RPCResponse(id: request.id, result: result, error: nil))
         case "notifications/initialized":
@@ -198,38 +203,18 @@ public final class StdioMCPServer {
 
         do {
             switch name {
-            case "list_policies":
-                try emitToolResult(id: id, payload: ["policies": try policyStore.listPolicies()])
-            case "probe_policy":
-                guard let policy = arguments["policy"]?.stringValue else {
-                    try emitToolError(id: id, message: "Missing `policy`.")
+            case "list_commands":
+                try emitToolResult(id: id, payload: ["commands": try commandStore.listCommands()])
+            case "run_command":
+                guard let commandName = arguments["name"]?.stringValue else {
+                    try emitToolError(id: id, message: "Missing `name`.")
                     return
                 }
-                let broker = HTTPPolicyBroker(policyStore: policyStore, secretStore: secretStore)
-                try emitToolResult(id: id, payload: broker.probe(policy: policy))
-            case "http_request":
-                guard let policy = arguments["policy"]?.stringValue else {
-                    try emitToolError(id: id, message: "Missing `policy`.")
-                    return
-                }
-                guard let method = arguments["method"]?.stringValue else {
-                    try emitToolError(id: id, message: "Missing `method`.")
-                    return
-                }
-                let broker = HTTPPolicyBroker(policyStore: policyStore, secretStore: secretStore)
-                let response = try await broker.request(
-                    policy: policy,
-                    request: BrokerRequest(
-                        method: method,
-                        path: arguments["path"]?.stringValue,
-                        url: arguments["url"]?.stringValue,
-                        headers: try decodeHeaders(arguments["headers"]),
-                        bodyData: try decodeBody(arguments["body"]).data,
-                        bodyIsStructuredJSON: try decodeBody(arguments["body"]).structuredJSON
-                    ),
-                    requester: arguments["requester"]?.stringValue ?? agentName ?? "MCP client"
-                )
-                try emitToolResult(id: id, payload: response)
+                let args = try decodeArgs(arguments["args"])
+                let cwd = arguments["cwd"]?.stringValue
+                let requester = arguments["requester"]?.stringValue ?? agentName ?? "MCP client"
+                let result = try await runner.run(name: commandName, args: args, cwd: cwd, requester: requester)
+                try emitToolResult(id: id, payload: result)
             default:
                 try emitToolError(id: id, message: "Unknown tool `\(name)`.")
             }
@@ -243,9 +228,9 @@ public final class StdioMCPServer {
     private func toolDescriptors() -> [ToolDescriptor] {
         [
             ToolDescriptor(
-                name: "list_policies",
-                title: "List policies",
-                description: "List the safe brokered policies available to the local agent. This never returns raw secret names or values.",
+                name: "list_commands",
+                title: "List wrapped commands",
+                description: "List the wrapped commands that Aegis Secret allows agents to run locally.",
                 inputSchema: [
                     "type": .string("object"),
                     "properties": .object([:]),
@@ -253,149 +238,107 @@ public final class StdioMCPServer {
                 outputSchema: [
                     "type": .string("object"),
                     "properties": .object([
-                        "policies": .object([
+                        "commands": .object([
+                            "type": .string("array")
+                        ])
+                    ]),
+                ]
+            ),
+            ToolDescriptor(
+                name: "run_command",
+                title: "Run wrapped command",
+                description: "Run a configured wrapped command with Touch ID approval. Aegis executes the real CLI directly without a shell.",
+                inputSchema: [
+                    "type": .string("object"),
+                    "properties": .object([
+                        "name": .object([
+                            "type": .string("string"),
+                            "description": .string("Wrapped command name to run, such as gh, aws, or gcloud.")
+                        ]),
+                        "args": .object([
                             "type": .string("array"),
+                            "description": .string("Argument vector to pass to the wrapped command.")
                         ]),
-                    ]),
-                ]
-            ),
-            ToolDescriptor(
-                name: "probe_policy",
-                title: "Probe policy",
-                description: "Check whether a configured policy exists locally and whether its backing Keychain secret is available.",
-                inputSchema: [
-                    "type": .string("object"),
-                    "properties": .object([
-                        "policy": .object([
+                        "cwd": .object([
                             "type": .string("string"),
-                            "description": .string("Policy name to probe."),
-                        ]),
-                    ]),
-                    "required": .array([.string("policy")]),
-                ],
-                outputSchema: [
-                    "type": .string("object"),
-                    "properties": .object([
-                        "ok": .object(["type": .string("boolean")]),
-                        "description": .object(["type": .string("string")]),
-                    ]),
-                ]
-            ),
-            ToolDescriptor(
-                name: "http_request",
-                title: "HTTP request",
-                description: "Send an authenticated HTTP request through a named local policy. The secret never leaves the local broker.",
-                inputSchema: [
-                    "type": .string("object"),
-                    "properties": .object([
-                        "policy": .object([
-                            "type": .string("string"),
-                            "description": .string("Policy name to use."),
-                        ]),
-                        "method": .object([
-                            "type": .string("string"),
-                            "description": .string("HTTP method, such as GET or POST."),
-                        ]),
-                        "path": .object([
-                            "type": .string("string"),
-                            "description": .string("Optional relative path under the policy base URL."),
-                        ]),
-                        "url": .object([
-                            "type": .string("string"),
-                            "description": .string("Optional absolute URL. It must still match the policy."),
-                        ]),
-                        "headers": .object([
-                            "type": .string("object"),
-                            "description": .string("Optional non-sensitive request headers."),
-                        ]),
-                        "body": .object([
-                            "description": .string("Optional request body. Strings are sent as-is; objects and arrays are JSON-encoded."),
+                            "description": .string("Optional absolute working directory for the command.")
                         ]),
                         "requester": .object([
                             "type": .string("string"),
-                            "description": .string("Optional caller label shown in the approval prompt."),
+                            "description": .string("Optional caller label shown in the approval prompt.")
                         ]),
                     ]),
                     "required": .array([
-                        .string("policy"),
-                        .string("method"),
+                        .string("name"),
+                        .string("args"),
                     ]),
                 ],
                 outputSchema: [
                     "type": .string("object"),
                     "properties": .object([
-                        "status": .object(["type": .string("integer")]),
-                        "headers": .object(["type": .string("object")]),
-                        "body": .object(["type": .string("string")]),
-                        "body_base64": .object(["type": .string("string")]),
-                        "mime_type": .object(["type": .string("string")]),
-                        "truncated": .object(["type": .string("boolean")]),
+                        "exit_code": .object(["type": .string("integer")]),
+                        "stdout": .object(["type": .string("string")]),
+                        "stderr": .object(["type": .string("string")]),
+                        "stdout_json": .object(["description": .string("Parsed stdout when stdout is valid JSON.")]),
+                        "stdout_truncated": .object(["type": .string("boolean")]),
+                        "stderr_truncated": .object(["type": .string("boolean")]),
                     ]),
                 ]
             ),
         ]
     }
 
-    private func decodeHeaders(_ value: JSONValue?) throws -> [String: String] {
-        guard let object = value?.objectValue else {
-            return [:]
+    private func decodeArgs(_ value: JSONValue?) throws -> [String] {
+        guard let array = value?.arrayValue else {
+            throw AegisSecretError.runtime("`args` must be an array of strings.")
         }
 
-        var headers: [String: String] = [:]
-        for (key, value) in object {
-            guard let stringValue = value.stringValue else {
-                throw AegisSecretError.runtime("Header `\(key)` must be a string.")
+        return try array.enumerated().map { index, item in
+            guard let value = item.stringValue else {
+                throw AegisSecretError.runtime("`args[\(index)]` must be a string.")
             }
-            headers[key] = stringValue
+            return value
         }
-        return headers
-    }
-
-    private func decodeBody(_ value: JSONValue?) throws -> (data: Data?, structuredJSON: Bool) {
-        guard let value else {
-            return (nil, false)
-        }
-
-        if let stringValue = value.stringValue {
-            return (stringValue.data(using: .utf8), false)
-        }
-
-        let data = try JSONEncoder().encode(value)
-        return (data, true)
-    }
-
-    private func emitToolResult<Payload: Codable>(id: JSONValue?, payload: Payload) throws {
-        let data = try prettyJSON(payload)
-        let response = ToolCallResult(
-            content: [ToolContent(type: "text", text: String(decoding: data, as: UTF8.self))],
-            structuredContent: payload,
-            isError: false
-        )
-        try emit(RPCResponse(id: id, result: response, error: nil))
-    }
-
-    private func emitToolError(id: JSONValue?, message: String) throws {
-        let payload = ToolErrorPayload(error: message)
-        let data = try prettyJSON(payload)
-        let response = ToolCallResult(
-            content: [ToolContent(type: "text", text: String(decoding: data, as: UTF8.self))],
-            structuredContent: payload,
-            isError: true
-        )
-        try emit(RPCResponse(id: id, result: response, error: nil))
-    }
-
-    private func emitError(id: JSONValue?, message: String) throws {
-        try emit(RPCResponse<JSONValue>(
-            id: id,
-            result: nil,
-            error: RPCError(code: -32601, message: message)
-        ))
     }
 
     private func emit<Payload: Encodable>(_ response: RPCResponse<Payload>) throws {
         let data = try JSONEncoder().encode(response)
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data([0x0A]))
+    }
+
+    private func emitError(id: JSONValue?, message: String) throws {
+        try emit(RPCResponse<JSONValue>(
+            id: id,
+            result: nil,
+            error: RPCError(code: -32602, message: message)
+        ))
+    }
+
+    private func emitToolError(id: JSONValue?, message: String) throws {
+        try emit(RPCResponse(
+            id: id,
+            result: ToolCallResult(
+                content: [ToolContent(type: "text", text: "Error: \(message)")],
+                structuredContent: ToolErrorPayload(error: message),
+                isError: true
+            ),
+            error: nil
+        ))
+    }
+
+    private func emitToolResult<Payload: Encodable>(id: JSONValue?, payload: Payload) throws {
+        let payloadData = try JSONEncoder().encode(payload)
+        let payloadText = String(decoding: payloadData, as: UTF8.self)
+
+        try emit(RPCResponse(
+            id: id,
+            result: ToolCallResult(
+                content: [ToolContent(type: "text", text: payloadText)],
+                structuredContent: payload,
+                isError: false
+            ),
+            error: nil
+        ))
     }
 }

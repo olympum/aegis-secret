@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "name": "gh",
+      "command": "gh",
+      "description": "GitHub CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["auth"],
+        ["alias"],
+        ["extension"]
+      ],
+      "deny_flags": ["--hostname"]
+    },
+    {
+      "name": "aws",
+      "command": "aws",
+      "description": "AWS CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["configure"],
+        ["sts", "assume-role"],
+        ["sts", "assume-role-with-saml"],
+        ["sts", "assume-role-with-web-identity"],
+        ["sts", "get-session-token"],
+        ["sts", "get-federation-token"],
+        ["ecr", "get-login-password"],
+        ["rds", "generate-db-auth-token"],
+        ["codeartifact", "get-authorization-token"],
+        ["eks", "get-token"]
+      ],
+      "deny_flags": ["--debug"]
+    },
+    {
+      "name": "gcloud",
+      "command": "gcloud",
+      "description": "Google Cloud CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["auth"],
+        ["config", "config-helper"]
+      ],
+      "deny_flags": ["--account", "--access-token-file"]
+    }
+  ]
+}

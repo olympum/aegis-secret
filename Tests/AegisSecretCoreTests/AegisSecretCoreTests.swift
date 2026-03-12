@@ -31,65 +31,23 @@ struct InMemorySecretStore: SecretStore {
     }
 }
 
-final class TrackingSecretStore: SecretStore, @unchecked Sendable {
-    private let events: EventLog
-    private let secrets: [String: Data]
+actor AuthRecorder: DeviceAuthenticator {
+    private(set) var reasons: [String] = []
 
-    init(events: EventLog, secrets: [String: Data]) {
-        self.events = events
-        self.secrets = secrets
+    func authenticate(reason: String) async throws {
+        reasons.append(reason)
     }
 
-    func setSecret(_ secretData: Data, for key: String) throws {}
-
-    func readSecret(for key: String) throws -> Data {
-        events.append("read")
-        guard let secret = secrets[key] else {
-            throw AegisSecretError.runtime("missing secret")
-        }
-        return secret
-    }
-
-    func readSecret(for key: String, reason: String) throws -> Data {
-        events.append("read")
-        events.append("reason:\(reason)")
-        guard let secret = secrets[key] else {
-            throw AegisSecretError.runtime("missing secret")
-        }
-        return secret
-    }
-
-    func deleteSecret(for key: String) throws -> Bool {
-        secrets[key] != nil
-    }
-
-    func listSecrets() throws -> [SecretListItem] {
-        secrets.keys.sorted().map(SecretListItem.init(key:))
-    }
-
-    func secretExists(for key: String) throws -> Bool {
-        events.append("exists")
-        return secrets[key] != nil
+    func snapshot() -> [String] {
+        reasons
     }
 }
 
-final class EventLog {
-    private(set) var values: [String] = []
+struct MockCommandExecutor: CommandExecutor {
+    let handler: @Sendable (CommandExecutionRequest) async throws -> RawCommandExecutionResult
 
-    func append(_ value: String) {
-        values.append(value)
-    }
-}
-
-final class MockHTTPSession: HTTPSession {
-    let handler: @Sendable (URLRequest) throws -> (Data, URLResponse)
-
-    init(handler: @escaping @Sendable (URLRequest) throws -> (Data, URLResponse)) {
-        self.handler = handler
-    }
-
-    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try handler(request)
+    func execute(_ request: CommandExecutionRequest) async throws -> RawCommandExecutionResult {
+        try await handler(request)
     }
 }
 
@@ -135,168 +93,242 @@ final class AegisSecretCoreTests: XCTestCase {
         )
     }
 
-    func testPolicyValidateFileParses() throws {
+    func testCommandValidateFileParses() throws {
         XCTAssertEqual(
-            try CommandParser().parse(["policy", "validate", "--file", "/tmp/policies.json"], stdinIsTTY: true),
-            .policy(.validateFile(path: "/tmp/policies.json"))
+            try CommandParser().parse(["command", "validate", "--file", "/tmp/commands.json"], stdinIsTTY: true),
+            .command(.validateFile(path: "/tmp/commands.json"))
         )
     }
 
-    func testPolicyConfigResolvesDefaults() throws {
-        let policy = try PolicyConfig(
-            name: "openai-api",
-            secretKey: "OPENAI_API_KEY",
-            baseURL: "https://api.openai.com",
-            allowedMethods: ["get", "post"],
-            authMode: .bearer,
-            allowedPathPrefixes: ["/v1"]
-        ).resolved()
-
-        XCTAssertEqual(policy.allowedHosts, ["api.openai.com"])
-        XCTAssertEqual(policy.allowedMethods, ["GET", "POST"])
-        XCTAssertEqual(policy.authHeaderName, "Authorization")
-        XCTAssertEqual(policy.authHeaderPrefix, "Bearer ")
+    func testRunParsesArgsAfterDoubleDash() throws {
+        XCTAssertEqual(
+            try CommandParser().parse(["run", "gh", "--", "api", "/user"], stdinIsTTY: true),
+            .run(name: "gh", args: ["api", "/user"])
+        )
     }
 
-    func testBrokerRejectsDisallowedHost() async throws {
-        let tempDirectory = try temporaryDirectory()
-        let policyFile = tempDirectory.appendingPathComponent("policies.json")
-        try prettyJSON(
-            PolicyFile(policies: [
-                PolicyConfig(
-                    name: "openai-api",
-                    secretKey: "OPENAI_API_KEY",
-                    baseURL: "https://api.openai.com",
-                    allowedMethods: ["GET"],
-                    authMode: .bearer,
-                    allowedPathPrefixes: ["/v1"]
-                )
-            ])
-        ).write(to: policyFile)
+    func testWrappedCommandConfigResolvesDefaults() throws {
+        let command = try WrappedCommandConfig(
+            name: "gh",
+            command: "gh"
+        ).resolved()
 
-        let broker = HTTPPolicyBroker(
-            policyStore: PolicyStore(fileURL: policyFile),
-            secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
-            session: MockHTTPSession { _ in
-                XCTFail("network call should not run")
-                throw URLError(.badServerResponse)
+        XCTAssertEqual(command.approvalWindowSeconds, 300)
+        XCTAssertEqual(command.timeoutSeconds, 30)
+        XCTAssertEqual(command.maxOutputBytes, 256 * 1024)
+    }
+
+    func testWrappedCommandRejectsAllowAndDenyPrefixesTogether() {
+        XCTAssertThrowsError(
+            try WrappedCommandConfig(
+                name: "gh",
+                command: "gh",
+                denyPrefixes: [["auth"]],
+                allowPrefixes: [["api"]]
+            ).resolved()
+        ) { error in
+            XCTAssertTrue((error as? AegisSecretError)?.description.contains("cannot define both") == true)
+        }
+    }
+
+    func testCommandStoreUsesDefaultTemplateWhenMissing() throws {
+        let tempDirectory = try temporaryDirectory()
+        let store = CommandStore(fileURL: tempDirectory.appendingPathComponent("commands.json"))
+
+        let names = try store.listCommands().map(\.name)
+        XCTAssertEqual(names, ["aws", "gcloud", "gh"])
+    }
+
+    func testCommandStoreValidateFileRejectsDuplicateNames() throws {
+        let tempDirectory = try temporaryDirectory()
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: "gh"),
+                WrappedCommandConfig(name: "gh", command: "gh")
+            ])
+        ).write(to: commandFile)
+
+        let store = CommandStore(fileURL: commandFile)
+        XCTAssertThrowsError(try store.validateCurrentConfiguration()) { error in
+            XCTAssertTrue((error as? AegisSecretError)?.description.contains("duplicate") == true)
+        }
+    }
+
+    func testRunnerRejectsUnknownWrappedCommand() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(CommandFile(commands: [])).write(to: commandFile)
+
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { _ in
+                XCTFail("executor should not run")
+                return RawCommandExecutionResult(stdout: Data(), stderr: Data(), exitCode: 0)
             }
         )
 
         do {
-            _ = try await broker.request(
-                policy: "openai-api",
-                request: BrokerRequest(method: "GET", url: "https://evil.example.com/v1/models"),
-                requester: "Test"
-            )
-            XCTFail("expected request to fail")
+            _ = try await runner.run(name: "gh", args: ["api", "/user"], requester: "Test")
+            XCTFail("expected wrapped command to fail")
+        } catch let error as AegisSecretError {
+            XCTAssertTrue(error.description.contains("was not found"))
+        }
+    }
+
+    func testRunnerRejectsDeniedPrefix() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let executablePath = try makeExecutable(named: "gh", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: executablePath.path, denyPrefixes: [["auth"]])
+            ])
+        ).write(to: commandFile)
+
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { _ in
+                XCTFail("executor should not run")
+                return RawCommandExecutionResult(stdout: Data(), stderr: Data(), exitCode: 0)
+            }
+        )
+
+        do {
+            _ = try await runner.run(name: "gh", args: ["auth", "token"], requester: "Test")
+            XCTFail("expected wrapped command to fail")
         } catch let error as AegisSecretError {
             XCTAssertTrue(error.description.contains("not allowed"))
         }
     }
 
-    func testBrokerInjectsAuthorizationHeader() async throws {
+    func testRunnerRejectsDeniedFlagWithEqualsSyntax() async throws {
         let tempDirectory = try temporaryDirectory()
-        let policyFile = tempDirectory.appendingPathComponent("policies.json")
+        let executablePath = try makeExecutable(named: "gh", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
         try prettyJSON(
-            PolicyFile(policies: [
-                PolicyConfig(
-                    name: "openai-api",
-                    description: "OpenAI API access",
-                    secretKey: "OPENAI_API_KEY",
-                    baseURL: "https://api.openai.com",
-                    allowedMethods: ["POST"],
-                    authMode: .bearer,
-                    allowedPathPrefixes: ["/v1"],
-                    defaultHeaders: ["Accept": "application/json"]
-                )
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: executablePath.path, denyFlags: ["--hostname"])
             ])
-        ).write(to: policyFile)
+        ).write(to: commandFile)
 
-        let session = MockHTTPSession { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            XCTAssertEqual(String(data: request.httpBody ?? Data(), encoding: .utf8), #"{"prompt":"hi"}"#)
-
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (Data(#"{"ok":true}"#.utf8), response)
-        }
-
-        let broker = HTTPPolicyBroker(
-            policyStore: PolicyStore(fileURL: policyFile),
-            secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
-            session: session
-        )
-
-        let response = try await broker.request(
-            policy: "openai-api",
-            request: BrokerRequest(
-                method: "POST",
-                path: "/v1/responses",
-                headers: [:],
-                bodyData: Data(#"{"prompt":"hi"}"#.utf8),
-                bodyIsStructuredJSON: true
-            ),
-            requester: "Test"
-        )
-
-        XCTAssertEqual(response.status, 200)
-        XCTAssertEqual(response.body, #"{"ok":true}"#)
-        XCTAssertNil(response.bodyBase64)
-    }
-
-    func testBrokerReadsSecretOnceWithPromptReason() async throws {
-        let tempDirectory = try temporaryDirectory()
-        let policyFile = tempDirectory.appendingPathComponent("policies.json")
-        try prettyJSON(
-            PolicyFile(policies: [
-                PolicyConfig(
-                    name: "gemini-api",
-                    secretKey: "GEMINI_API_KEY",
-                    baseURL: "https://generativelanguage.googleapis.com",
-                    allowedMethods: ["POST"],
-                    authMode: .header,
-                    headerName: "x-goog-api-key",
-                    allowedPathPrefixes: ["/v1beta/models"]
-                )
-            ])
-        ).write(to: policyFile)
-
-        let events = EventLog()
-        let broker = HTTPPolicyBroker(
-            policyStore: PolicyStore(fileURL: policyFile),
-            secretStore: TrackingSecretStore(events: events, secrets: ["GEMINI_API_KEY": Data("secret".utf8)]),
-            session: MockHTTPSession { request in
-                let response = HTTPURLResponse(
-                    url: try XCTUnwrap(request.url),
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                return (Data(#"{"ok":true}"#.utf8), response)
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { _ in
+                XCTFail("executor should not run")
+                return RawCommandExecutionResult(stdout: Data(), stderr: Data(), exitCode: 0)
             }
         )
 
-        _ = try await broker.request(
-            policy: "gemini-api",
-            request: BrokerRequest(method: "POST", path: "/v1beta/models/gemini-2.5-pro:generateContent"),
-            requester: "Test"
+        do {
+            _ = try await runner.run(name: "gh", args: ["repo", "view", "--hostname=example.com"], requester: "Test")
+            XCTFail("expected wrapped command to fail")
+        } catch let error as AegisSecretError {
+            XCTAssertTrue(error.description.contains("Flag"))
+        }
+    }
+
+    func testRunnerRequiresApprovalOncePerWindow() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let executablePath = try makeExecutable(named: "gh", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: executablePath.path)
+            ])
+        ).write(to: commandFile)
+
+        let authenticator = AuthRecorder()
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: authenticator,
+            executor: MockCommandExecutor { request in
+                XCTAssertEqual(request.arguments, ["api", "/user"])
+                return RawCommandExecutionResult(
+                    stdout: Data(#"{"login":"olympum"}"#.utf8),
+                    stderr: Data(),
+                    exitCode: 0
+                )
+            }
         )
 
-        XCTAssertEqual(events.values.count, 2)
-        XCTAssertEqual(events.values.first, "read")
-        XCTAssertTrue(events.values.last?.contains("Allow Test to use policy 'gemini-api' for POST /v1beta/models/gemini-2.5-pro:generateContent.") == true)
+        let first = try await runner.run(name: "gh", args: ["api", "/user"], requester: "Claude")
+        XCTAssertEqual(first.stdoutJSON, JSONValue.object(["login": JSONValue.string("olympum")]))
+
+        _ = try await runner.run(name: "gh", args: ["api", "/user"], requester: "Claude")
+        let reasons = await authenticator.snapshot()
+        XCTAssertEqual(reasons.count, 1)
+        XCTAssertTrue(reasons[0].contains("wrapped command 'gh'"))
+    }
+
+    func testRunnerReturnsNonZeroExitCodeWithoutThrowing() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let executablePath = try makeExecutable(named: "aws", in: tempDirectory, contents: "#!/bin/zsh\nexit 3\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "aws", command: executablePath.path)
+            ])
+        ).write(to: commandFile)
+
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { _ in
+                RawCommandExecutionResult(
+                    stdout: Data("ok\n".utf8),
+                    stderr: Data("warn\n".utf8),
+                    exitCode: 3
+                )
+            }
+        )
+
+        let result = try await runner.run(name: "aws", args: ["sts", "get-caller-identity"], requester: "Claude")
+        XCTAssertEqual(result.exitCode, 3)
+        XCTAssertEqual(result.stdout, "ok\n")
+        XCTAssertEqual(result.stderr, "warn\n")
+    }
+
+    func testRunnerRejectsRelativeWorkingDirectory() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let executablePath = try makeExecutable(named: "gh", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: executablePath.path)
+            ])
+        ).write(to: commandFile)
+
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { _ in
+                XCTFail("executor should not run")
+                return RawCommandExecutionResult(stdout: Data(), stderr: Data(), exitCode: 0)
+            }
+        )
+
+        do {
+            _ = try await runner.run(name: "gh", args: [], cwd: "relative/path", requester: "Claude")
+            XCTFail("expected wrapped command to fail")
+        } catch let error as AegisSecretError {
+            XCTAssertTrue(error.description.contains("absolute path"))
+        }
     }
 
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func makeExecutable(named name: String, in directory: URL, contents: String) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
     }
 }

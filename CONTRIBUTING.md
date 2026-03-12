@@ -70,10 +70,10 @@ For release work, follow [RELEASING.md](RELEASING.md).
 
 ## Code Style
 
-- Keep the default agent path policy-based rather than raw-secret-based.
+- Keep raw secret management CLI-only.
 - Do not add MCP tools that return raw secret values.
-- Keep auth injection and policy enforcement in the local broker, not in prompts.
-- Prefer small, explicit interfaces over generic secret execution surfaces.
+- Keep the default agent path command-based rather than secret-text-based.
+- Prefer wrapped-command mediation over shell execution or generic prompt conventions.
 
 ## Commit Policy
 

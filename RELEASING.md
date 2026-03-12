@@ -139,7 +139,7 @@ Before publishing a release:
 - `swift test` passes.
 - The app builds in Release mode.
 - `aegis-secret list` works from the installed app wrapper.
-- A policy-backed request completes with exactly one Touch ID prompt.
+- A wrapped command completes with exactly one Touch ID prompt after approval-cache expiry.
 - `spctl --assess --type execute` accepts the stapled app.
 - `spctl --assess --type install` accepts the stapled package.
 - The GitHub release notes include install steps and the checksum file.

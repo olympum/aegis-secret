@@ -28,7 +28,7 @@ coordinate remediation and disclosure timing with the reporter.
 Security reports are especially helpful for:
 
 - Keychain access control and storage behavior
-- policy enforcement bypasses
+- wrapped-command whitelist or deny-rule bypasses
 - raw secret disclosure paths
 - installation, signing, and notarization issues
 - MCP tool abuse or sandbox escape concerns
