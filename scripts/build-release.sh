@@ -19,6 +19,8 @@ ARCHIVE_LOG="$DIST_DIR/xcodebuild-archive.log"
 EXPORT_LOG="$DIST_DIR/xcodebuild-export.log"
 EXPORT_OPTIONS_PLIST="$DIST_DIR/ExportOptions.plist"
 TEAM_ID="${AEGIS_SECRET_TEAM_ID:-}"
+PROVISIONING_PROFILE_SPECIFIER="${AEGIS_SECRET_PROVISIONING_PROFILE_SPECIFIER:-}"
+PRODUCT_BUNDLE_IDENTIFIER="com.olympum.aegis-secret"
 
 require_value "$TEAM_ID" "AEGIS_SECRET_TEAM_ID"
 
@@ -33,15 +35,54 @@ ARCHIVE_ARGS=(
   -destination "platform=macOS"
   -archivePath "$ARCHIVE_PATH"
   -derivedDataPath "$BUILD_DIR"
-  -allowProvisioningUpdates
   DEVELOPMENT_TEAM="$TEAM_ID"
+)
+
+if [[ -n "$PROVISIONING_PROFILE_SPECIFIER" ]]; then
+  ARCHIVE_ARGS+=(
+    CODE_SIGN_STYLE=Manual
+    CODE_SIGN_IDENTITY="Developer ID Application"
+    PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER"
+  )
+else
+  ARCHIVE_ARGS+=(
+    -allowProvisioningUpdates
+  )
+fi
+
+ARCHIVE_ARGS+=(
   archive
 )
 append_xcode_auth_args ARCHIVE_ARGS
 
 "${ARCHIVE_ARGS[@]}" | tee "$ARCHIVE_LOG"
 
-cat > "$EXPORT_OPTIONS_PLIST" <<EOF
+if [[ -n "$PROVISIONING_PROFILE_SPECIFIER" ]]; then
+  cat > "$EXPORT_OPTIONS_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>destination</key>
+  <string>export</string>
+  <key>method</key>
+  <string>developer-id</string>
+  <key>signingStyle</key>
+  <string>manual</string>
+  <key>signingCertificate</key>
+  <string>Developer ID Application</string>
+  <key>teamID</key>
+  <string>$TEAM_ID</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>$PRODUCT_BUNDLE_IDENTIFIER</key>
+    <string>$PROVISIONING_PROFILE_SPECIFIER</string>
+  </dict>
+</dict>
+</plist>
+EOF
+else
+  cat > "$EXPORT_OPTIONS_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -57,6 +98,7 @@ cat > "$EXPORT_OPTIONS_PLIST" <<EOF
 </dict>
 </plist>
 EOF
+fi
 
 EXPORT_ARGS=(
   xcodebuild
@@ -64,8 +106,13 @@ EXPORT_ARGS=(
   -archivePath "$ARCHIVE_PATH"
   -exportPath "$EXPORT_DIR"
   -exportOptionsPlist "$EXPORT_OPTIONS_PLIST"
-  -allowProvisioningUpdates
 )
+
+if [[ -z "$PROVISIONING_PROFILE_SPECIFIER" ]]; then
+  EXPORT_ARGS+=(
+    -allowProvisioningUpdates
+  )
+fi
 append_xcode_auth_args EXPORT_ARGS
 
 "${EXPORT_ARGS[@]}" | tee "$EXPORT_LOG"

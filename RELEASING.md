@@ -28,10 +28,11 @@ Before the first binary release, set up the following in Apple Developer:
 1. A paid Apple Developer Program membership.
 2. A `Developer ID Application` certificate on the release machine.
 3. Notarization credentials for `notarytool`.
+4. A `Developer ID` provisioning profile for `com.olympum.aegis-secret`.
 
 Optional:
 
-4. A `Developer ID Installer` certificate if you later decide to distribute a
+5. A `Developer ID Installer` certificate if you later decide to distribute a
    signed `.pkg`.
 
 ## Manual One-Time Setup
@@ -64,6 +65,26 @@ security find-identity -v -p codesigning
 ```
 
 You should see a `Developer ID Application: ...` identity for the release user.
+
+### 4. Create a Developer ID provisioning profile
+
+Because Aegis Secret uses Keychain sharing, the release build needs a
+Developer ID provisioning profile in addition to the certificate.
+
+Create an explicit App ID for `com.olympum.aegis-secret`, enable Keychain
+Sharing for that App ID, and create a `Developer ID` provisioning profile that
+uses your `Developer ID Application` certificate.
+
+For GitHub Actions, add that profile as a repository secret:
+
+- `DEVELOPER_ID_PROVISIONING_PROFILE_BASE64`
+
+Populate it with:
+
+```bash
+base64 -i /absolute/path/to/AegisSecretDeveloperID.provisionprofile \
+  | gh secret set DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 --repo olympum/aegis-secret
+```
 
 ## Release Build Steps
 
@@ -129,6 +150,7 @@ The release workflow expects these GitHub secrets:
 - `APPLE_TEAM_ID`
 - `DEVELOPER_ID_APPLICATION_P12_BASE64`
 - `DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `DEVELOPER_ID_PROVISIONING_PROFILE_BASE64`
 - `APP_STORE_CONNECT_API_KEY_P8`
 - `APP_STORE_CONNECT_API_KEY_ID`
 - `APP_STORE_CONNECT_API_ISSUER_ID`

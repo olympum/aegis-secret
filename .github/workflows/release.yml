@@ -60,6 +60,25 @@ jobs:
           security default-keychain -d user -s build.keychain
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" build.keychain
 
+      - name: Install Developer ID provisioning profile
+        if: ${{ secrets.DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 != '' }}
+        env:
+          PROFILE_BASE64: ${{ secrets.DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$RUNNER_TEMP/aegis-secret.provisionprofile"
+          PROFILE_PLIST="$RUNNER_TEMP/aegis-secret-provisioning.plist"
+          mkdir -p "$PROFILE_DIR"
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$PROFILE_PLIST")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print Name' "$PROFILE_PLIST")"
+          cp "$PROFILE_PATH" "$PROFILE_DIR/$PROFILE_UUID.provisionprofile"
+          {
+            echo "AEGIS_SECRET_PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME"
+            echo "AEGIS_SECRET_PROVISIONING_PROFILE_UUID=$PROFILE_UUID"
+          } >> "$GITHUB_ENV"
+
       - name: Write App Store Connect API key
         run: |
           echo "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$RUNNER_TEMP/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
