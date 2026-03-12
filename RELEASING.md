@@ -13,9 +13,10 @@ source installs.
 
 Recommended v1 release format:
 
-- notarized `Aegis Secret-<version>-macOS.dmg`
+- notarized `Aegis Secret-<version>-installer.pkg`
 - detached checksum file such as `SHA256SUMS`
-- drag-and-drop install with a short in-DMG install note
+- signed installer that places the app in `/Applications` and PATH shims in
+  `/usr/local/bin`
 
 GitHub Releases is an appropriate place to host these assets. Apple is still
 required for code signing and notarization.
@@ -26,13 +27,14 @@ Before the first binary release, set up the following in Apple Developer:
 
 1. A paid Apple Developer Program membership.
 2. A `Developer ID Application` certificate on the release machine.
-3. Notarization credentials for `notarytool`.
-4. A `Developer ID` provisioning profile for `com.olympum.aegis-secret`.
+3. A `Developer ID Installer` certificate on the release machine.
+4. Notarization credentials for `notarytool`.
+5. A `Developer ID` provisioning profile for `com.olympum.aegis-secret`.
 
 Optional:
 
-5. A `Developer ID Installer` certificate if you later decide to distribute a
-   signed `.pkg`.
+6. A custom installer background / resources bundle if you later decide to
+   brand the package UI.
 
 ## Manual One-Time Setup
 
@@ -41,7 +43,12 @@ Optional:
 Create a `Developer ID Application` certificate in Apple Developer / Xcode and
 install it in the login keychain of the release machine.
 
-### 2. Set up notarization credentials
+### 2. Create a Developer ID Installer certificate
+
+Create a `Developer ID Installer` certificate in Apple Developer / Xcode and
+install it in the login keychain of the release machine.
+
+### 3. Set up notarization credentials
 
 Create a `notarytool` keychain profile or equivalent notarization credentials on
 the release machine.
@@ -55,7 +62,7 @@ AEGIS_SECRET_NOTARY_PROFILE="AegisSecretRelease"
 EOF
 ```
 
-### 3. Verify local signing
+### 4. Verify local signing
 
 Confirm the signing identity exists:
 
@@ -65,7 +72,7 @@ security find-identity -v -p codesigning
 
 You should see a `Developer ID Application: ...` identity for the release user.
 
-### 4. Create a Developer ID provisioning profile
+### 5. Create a Developer ID provisioning profile
 
 Because Aegis Secret uses Keychain sharing, the release build needs a
 Developer ID provisioning profile in addition to the certificate.
@@ -101,16 +108,16 @@ At release time:
 ./scripts/notarize-release.sh v0.1.0
 ```
 
-3. Package the DMG:
+3. Package the signed installer:
 
 ```bash
 ./scripts/package-release-assets.sh v0.1.0
 ```
 
-4. Sign, notarize, and staple the DMG:
+4. Notarize and staple the installer package:
 
 ```bash
-./scripts/notarize-dmg.sh v0.1.0
+./scripts/notarize-pkg.sh v0.1.0
 ```
 
 5. Create a draft GitHub release:
@@ -134,7 +141,7 @@ Before publishing a release:
 - `aegis-secret list` works from the installed app wrapper.
 - A policy-backed request completes with exactly one Touch ID prompt.
 - `spctl --assess --type execute` accepts the stapled app.
-- `spctl --assess --type open` accepts the stapled DMG.
+- `spctl --assess --type install` accepts the stapled package.
 - The GitHub release notes include install steps and the checksum file.
 
 ## Future Automation
@@ -156,6 +163,8 @@ The release workflow expects these GitHub secrets:
 - `APPLE_TEAM_ID`
 - `DEVELOPER_ID_APPLICATION_P12_BASE64`
 - `DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `DEVELOPER_ID_INSTALLER_P12_BASE64`
+- `DEVELOPER_ID_INSTALLER_P12_PASSWORD`
 - `DEVELOPER_ID_PROVISIONING_PROFILE_BASE64`
 - `APP_STORE_CONNECT_API_KEY_P8`
 - `APP_STORE_CONNECT_API_KEY_ID`

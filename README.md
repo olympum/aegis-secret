@@ -92,18 +92,18 @@ Not:
 When GitHub release assets are available, install from a notarized binary instead
 of building from source:
 
-1. Download `Aegis Secret-<version>-macOS.dmg`.
-2. Open the DMG.
-3. Drag `Aegis Secret.app` into `Applications`.
-4. Run:
+1. Download `Aegis Secret-<version>-installer.pkg`.
+2. Open the package and complete the installer.
+
+The installer places `Aegis Secret.app` in `/Applications`, installs
+`aegis-secret` and `aegis-secret-mcp` into `/usr/local/bin`, and makes a
+best-effort attempt to register the user-scoped MCP server for Codex and Claude.
+
+If you need to repair the per-user MCP registration later, run:
 
 ```bash
-/Applications/Aegis\ Secret.app/Contents/MacOS/aegis-secret install-user
+aegis-secret install-user
 ```
-
-That command creates `aegis-secret` and `aegis-secret-mcp` shims in
-`~/.local/bin` and registers the user-scoped MCP server for Codex and Claude
-when those CLIs are present.
 
 ### Build From Source
 
