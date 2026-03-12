@@ -120,7 +120,8 @@ That per-user setup step is what creates and refreshes:
 
 - `~/.config/aegis-secret/commands.base.json`
   This is the managed base config. Aegis replaces it on install and upgrade with
-  the shipped default wrapped commands such as `gh`, `aws`, and `gcloud`.
+  the shipped default wrapped commands such as `gh`, `aws`, `gcloud`,
+  `kubectl`, `terraform`, and `az`.
 - `~/.config/aegis-secret/commands.local.json`
   This is the user-owned overlay. Aegis creates it if missing, but does not
   overwrite your edits. Use it to disable shipped commands, override defaults,
@@ -167,6 +168,9 @@ Examples:
 - `aws sts assume-role ...` is blocked
 - `aws ecr get-login-password` is blocked
 - `gcloud auth ...` is blocked
+- `kubectl apply ...` is blocked
+- `terraform apply` is blocked
+- `az login` is blocked
 
 Wrapped command names are the top-level whitelist. If `kubectl` is not
 configured, Aegis will not run `kubectl` over MCP.
@@ -221,7 +225,7 @@ After `install-user`, Claude and Codex should prefer Aegis for wrapped tools.
 Expected agent flow:
 
 1. call `list_commands`
-2. see whether a tool such as `gh`, `aws`, or `gcloud` is wrapped
+2. see whether a tool such as `gh`, `aws`, `gcloud`, `kubectl`, `terraform`, or `az` is wrapped
 3. use `run_command` instead of calling that CLI directly through Bash
 4. fall back to direct shell use only when the command is not wrapped
 

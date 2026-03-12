@@ -51,12 +51,12 @@ if [[ -n "$NOTES_FILE" ]]; then
 else
   TEMP_NOTES_FILE="$(mktemp)"
   cat > "$TEMP_NOTES_FILE" <<EOF
-Aegis Secret $VERSION is the first public binary release.
+Aegis Secret $VERSION is the latest binary release.
 
 What's included:
 - Notarized macOS installer package
 - Signed app bundle with Touch ID-gated command access
-- Local MCP server for running wrapped commands such as \`gh\`, \`aws\`, and \`gcloud\`
+- Local MCP server for running wrapped commands such as \`gh\`, \`aws\`, \`gcloud\`, \`kubectl\`, \`terraform\`, and \`az\`
 - CLI for storing secrets and managing wrapped commands
 
 Install:
