@@ -10,6 +10,7 @@ APP_BINARY="$APP_DIR/Contents/MacOS/aegis-secret"
 SERVER_NAME="aegis-secret"
 CONFIG_DIR="$HOME/.config/aegis-secret"
 INSTALL_ENV_FILE="$CONFIG_DIR/install.env"
+COMMANDS_FILE="$CONFIG_DIR/commands.json"
 TEAM_ID="${AEGIS_SECRET_TEAM_ID:-}"
 BUILD_LOG="$BUILD_DIR/xcodebuild-install.log"
 
@@ -83,6 +84,16 @@ exec "$APP_BINARY" --mcp-server "\$@"
 EOF
 
 chmod +x "$BIN_DIR/aegis-secret" "$BIN_DIR/aegis-secret-mcp"
+
+mkdir -p "$CONFIG_DIR"
+if [[ ! -f "$COMMANDS_FILE" ]]; then
+  cat > "$COMMANDS_FILE" <<'EOF'
+{
+  "version" : 1,
+  "commands" : []
+}
+EOF
+fi
 
 if command -v codex >/dev/null 2>&1; then
   codex mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true

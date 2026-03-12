@@ -129,6 +129,17 @@ User overrides:
 - can disable a shipped wrapped command
 - can add new wrapped commands
 
+Both the package installer and `aegis-secret install-user` create
+`~/.config/aegis-secret/commands.json` if it does not exist yet. It starts as an
+empty override file:
+
+```json
+{
+  "version": 1,
+  "commands": []
+}
+```
+
 Start from [`examples/commands.example.json`](examples/commands.example.json)
 for a user override file:
 

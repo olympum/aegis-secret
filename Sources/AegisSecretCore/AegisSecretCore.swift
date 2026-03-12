@@ -619,6 +619,15 @@ public final class CommandStore: @unchecked Sendable {
         return merged.commands.count
     }
 
+    public func writeUserOverrideFileIfMissing() throws {
+        guard !fileManager.fileExists(atPath: fileURL.path) else {
+            return
+        }
+
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try prettyJSON(CommandFile(version: 1, commands: [])).write(to: fileURL, options: .atomic)
+    }
+
     public func resolveExecutable(named executableName: String) -> URL? {
         if executableName.contains("/") {
             let url = URL(fileURLWithPath: expandUserPath(executableName))
@@ -1413,6 +1422,8 @@ public struct UserInstaller {
         guard !appBundleURL.path.hasPrefix("/Volumes/") else {
             throw AegisSecretError.runtime("Run `install-user` after copying Aegis Secret.app to /Applications or ~/Applications.")
         }
+
+        try commandStore.writeUserOverrideFileIfMissing()
 
         let executableURL = appBundleURL.appendingPathComponent("Contents/MacOS/aegis-secret")
         let binDirectory = fileManager.homeDirectoryForCurrentUser
