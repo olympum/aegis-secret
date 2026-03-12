@@ -14,10 +14,19 @@ jobs:
       - name: Check out
         uses: actions/checkout@v5
 
-      - name: Set up Swift
-        uses: swift-actions/setup-swift@65540b95f51493d65f5e59e97dcef9629ddf11bf
-        with:
-          swift-version: "6.2"
+      - name: Select latest stable Xcode
+        run: |
+          latest_xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_*.app' ! -iname '*beta*' | sort -V | tail -1)"
+          if [[ -z "$latest_xcode" ]]; then
+            latest_xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' ! -iname '*beta*' | sort -V | tail -1)"
+          fi
+          if [[ -z "$latest_xcode" ]]; then
+            echo "No stable Xcode installation found on runner" >&2
+            exit 1
+          fi
+          echo "Using Xcode at $latest_xcode"
+          sudo xcode-select -s "$latest_xcode"
+          xcodebuild -version
 
       - name: Show Swift version
         run: swift --version
