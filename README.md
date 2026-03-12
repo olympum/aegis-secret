@@ -18,7 +18,8 @@ surface, and Aegis runs the real CLI directly after approval.
 The installer places `Aegis Secret.app` in `/Applications`, installs
 `aegis-secret` and `aegis-secret-mcp` into `/usr/local/bin`, and makes a
 best-effort attempt to register the user-scoped MCP server for Codex and
-Claude.
+Claude. It also updates the managed Aegis guidance block in
+`~/.codex/AGENTS.md` and `~/.claude/CLAUDE.md`.
 
 If you need to repair the per-user MCP registration later, run:
 
@@ -181,6 +182,23 @@ That example does three things:
 - disables the shipped `aws` wrapper
 - adds a new `kubectl` wrapper
 
+## Agent Guidance
+
+`aegis-secret install-user` also manages a small Aegis block in:
+
+- `~/.codex/AGENTS.md`
+- `~/.claude/CLAUDE.md`
+
+That managed block tells Codex and Claude to prefer:
+
+1. `list_commands`
+2. `run_command`
+
+for wrapped tools such as `gh`, `aws`, and `gcloud`.
+
+Your own notes can stay in those files. Aegis only updates the marked managed
+section and leaves the rest alone.
+
 ## CLI Reference
 
 ```bash
@@ -206,4 +224,4 @@ aegis-secret run <name> -- <args...>
 - Aegis closes stdin, applies timeouts and output caps, and prompts for Touch ID
   before execution.
 - Default approval caching is five minutes per wrapped command, configurable in
-  `commands.json`.
+  `commands.base.json` or `commands.local.json`.

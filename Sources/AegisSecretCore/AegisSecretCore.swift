@@ -7,6 +7,8 @@ public let aegisSecretMetadataServiceName = "Aegis Secrets Metadata"
 public let commandsFileEnvironmentKey = "AEGIS_SECRET_COMMANDS_FILE"
 public let systemCommandsFileEnvironmentKey = "AEGIS_SECRET_SYSTEM_COMMANDS_FILE"
 public let bundledCommandsResourceName = "commands.default"
+public let bundledClaudeGuidanceResourceName = "claude.guidance"
+public let bundledCodexGuidanceResourceName = "codex.guidance"
 
 public enum ExitCode: Int32 {
     case success = 0
@@ -1335,6 +1337,12 @@ public struct CLIApplication {
             if !installation.registeredCodex && !installation.registeredClaude {
                 print("No supported MCP client CLI was found, so only PATH shims were created.")
             }
+            if installation.updatedCodexGuidance {
+                print("Updated ~/.codex/AGENTS.md with the managed Aegis guidance block.")
+            }
+            if installation.updatedClaudeGuidance {
+                print("Updated ~/.claude/CLAUDE.md with the managed Aegis guidance block.")
+            }
         case .command(let wrappedCommandCommand):
             try handleWrappedCommandManagement(wrappedCommandCommand)
         case .run(let name, let args):
@@ -1440,6 +1448,8 @@ public struct UserInstallationSummary {
     public let appBundleURL: URL
     public let registeredCodex: Bool
     public let registeredClaude: Bool
+    public let updatedCodexGuidance: Bool
+    public let updatedClaudeGuidance: Bool
 }
 
 public struct UserInstaller {
@@ -1490,11 +1500,15 @@ public struct UserInstaller {
         let serverName = "aegis-secret"
         let registeredCodex = try registerCodex(serverName: serverName, executableURL: executableURL)
         let registeredClaude = try registerClaude(serverName: serverName, executableURL: executableURL)
+        let updatedCodexGuidance = try updateCodexGuidance()
+        let updatedClaudeGuidance = try updateClaudeGuidance()
 
         return UserInstallationSummary(
             appBundleURL: appBundleURL,
             registeredCodex: registeredCodex,
-            registeredClaude: registeredClaude
+            registeredClaude: registeredClaude,
+            updatedCodexGuidance: updatedCodexGuidance,
+            updatedClaudeGuidance: updatedClaudeGuidance
         )
     }
 
@@ -1593,6 +1607,69 @@ public struct UserInstaller {
         return true
     }
 
+    private func updateCodexGuidance() throws -> Bool {
+        let guidanceURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("AGENTS.md", isDirectory: false)
+        let guidance = bundledGuidance(
+            resourceName: bundledCodexGuidanceResourceName,
+            fallback: defaultCodexGuidance
+        )
+        try upsertManagedGuidance(guidance, into: guidanceURL)
+        return true
+    }
+
+    private func updateClaudeGuidance() throws -> Bool {
+        let guidanceURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("CLAUDE.md", isDirectory: false)
+        let guidance = bundledGuidance(
+            resourceName: bundledClaudeGuidanceResourceName,
+            fallback: defaultClaudeGuidance
+        )
+        try upsertManagedGuidance(guidance, into: guidanceURL)
+        return true
+    }
+
+    private func bundledGuidance(resourceName: String, fallback: String) -> String {
+        if let url = Bundle.main.url(forResource: resourceName, withExtension: "md"),
+           let contents = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           !contents.isEmpty {
+            return contents
+        }
+
+        return fallback
+    }
+
+    private func upsertManagedGuidance(_ guidance: String, into fileURL: URL) throws {
+        let startMarker = "<!-- aegis-secret:begin -->"
+        let endMarker = "<!-- aegis-secret:end -->"
+        let managedSection = """
+        \(startMarker)
+        \(guidance)
+        \(endMarker)
+        """
+
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let existing = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+        let updated: String
+
+        if let startRange = existing.range(of: startMarker),
+           let endRange = existing.range(of: endMarker),
+           startRange.lowerBound <= endRange.lowerBound {
+            let replacementRange = startRange.lowerBound..<endRange.upperBound
+            updated = existing.replacingCharacters(in: replacementRange, with: managedSection)
+        } else if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated = managedSection + "\n"
+        } else {
+            let separator = existing.hasSuffix("\n") ? "\n" : "\n\n"
+            updated = existing + separator + managedSection + "\n"
+        }
+
+        try updated.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
     private func findExecutable(named executableName: String) -> URL? {
         commandStore.resolveExecutable(named: executableName)
     }
@@ -1627,6 +1704,30 @@ public struct UserInstaller {
         return output
     }
 }
+
+private let defaultClaudeGuidance = """
+## Aegis Secret
+
+When a task involves local CLIs such as `gh`, `aws`, `gcloud`, `kubectl`, or similar tools, prefer the `aegis-secret` MCP server when it is available.
+
+- Call `list_commands` first to discover which wrapped commands Aegis exposes.
+- Use `run_command` for wrapped tools instead of invoking those CLIs directly through Bash.
+- Treat Aegis as the default path for wrapped local tools, not as a fallback after shelling out.
+- Use `aegis-secret command list` and `aegis-secret command show <NAME>` only as a local fallback when MCP is unavailable.
+- Use `aegis-secret get <KEY> --agent Claude` only for explicit human-approved debugging or when the user specifically asks for the raw value.
+"""
+
+private let defaultCodexGuidance = """
+## Aegis Secret
+
+When a task involves local CLIs such as `gh`, `aws`, `gcloud`, `kubectl`, or similar tools, prefer the `aegis-secret` MCP server when it is available.
+
+- Call `list_commands` first to discover which wrapped commands Aegis exposes.
+- Use `run_command` for wrapped tools instead of invoking those CLIs directly through Bash.
+- Treat Aegis as the default path for wrapped local tools, not as a fallback after shelling out.
+- Use `aegis-secret command list` and `aegis-secret command show <NAME>` only as a local fallback when MCP is unavailable.
+- Use `aegis-secret get <KEY> --agent Codex` only for explicit human-approved debugging or when the user specifically asks for the raw value.
+"""
 
 public func readPassword() -> String? {
     let stdinFD = FileHandle.standardInput.fileDescriptor
