@@ -538,7 +538,7 @@ public final class CommandStore: @unchecked Sendable {
         }
 
         return defaultConfigDirectory()
-            .appendingPathComponent("commands.json", isDirectory: false)
+            .appendingPathComponent("commands.local.json", isDirectory: false)
     }
 
     public static func defaultSystemURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -1420,7 +1420,7 @@ Notes:
   `set` reads from the terminal by default, or from stdin when piped / passed `--stdin`.
   `get` is for explicit human use and reveals the raw secret on stdout after device-owner authentication.
   `install-user` creates PATH shims in `~/.local/bin` and registers user-scoped MCP integrations for installed Codex / Claude CLIs.
-  Aegis reads a managed base file from `~/.config/aegis-secret/commands.base.json` and overlays user changes from `~/.config/aegis-secret/commands.json`.
+  Aegis reads a managed base file from `~/.config/aegis-secret/commands.base.json` and overlays user changes from `~/.config/aegis-secret/commands.local.json`.
 """
 
 public struct UserInstallationSummary {
@@ -1551,7 +1551,12 @@ public struct UserInstaller {
 
         _ = try runProcess(
             executableURL: claudeExecutable,
-            arguments: ["mcp", "remove", serverName],
+            arguments: ["mcp", "remove", serverName, "-s", "user"],
+            allowFailure: true
+        )
+        _ = try runProcess(
+            executableURL: claudeExecutable,
+            arguments: ["mcp", "remove", serverName, "-s", "local"],
             allowFailure: true
         )
 
@@ -1570,7 +1575,7 @@ public struct UserInstaller {
 
         _ = try runProcess(
             executableURL: claudeExecutable,
-            arguments: ["mcp", "add-json", serverName, payload]
+            arguments: ["mcp", "add-json", "-s", "user", serverName, payload]
         )
         return true
     }

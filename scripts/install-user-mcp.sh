@@ -11,7 +11,7 @@ SERVER_NAME="aegis-secret"
 CONFIG_DIR="$HOME/.config/aegis-secret"
 INSTALL_ENV_FILE="$CONFIG_DIR/install.env"
 SYSTEM_COMMANDS_FILE="$CONFIG_DIR/commands.base.json"
-COMMANDS_FILE="$CONFIG_DIR/commands.json"
+COMMANDS_FILE="$CONFIG_DIR/commands.local.json"
 TEAM_ID="${AEGIS_SECRET_TEAM_ID:-}"
 BUILD_LOG="$BUILD_DIR/xcodebuild-install.log"
 
@@ -105,8 +105,9 @@ if command -v codex >/dev/null 2>&1; then
 fi
 
 if command -v claude >/dev/null 2>&1; then
-  claude mcp remove "$SERVER_NAME" >/dev/null 2>&1 || true
-  claude mcp add-json "$SERVER_NAME" "{\"type\":\"stdio\",\"command\":\"$APP_BINARY\",\"args\":[\"--mcp-server\"],\"env\":{\"AEGIS_SECRET_AGENT_NAME\":\"Claude\"}}"
+  claude mcp remove "$SERVER_NAME" -s user >/dev/null 2>&1 || true
+  claude mcp remove "$SERVER_NAME" -s local >/dev/null 2>&1 || true
+  claude mcp add-json -s user "$SERVER_NAME" "{\"type\":\"stdio\",\"command\":\"$APP_BINARY\",\"args\":[\"--mcp-server\"],\"env\":{\"AEGIS_SECRET_AGENT_NAME\":\"Claude\"}}"
 fi
 
 echo "Installed Xcode-signed Aegis Secret bundle to $APP_DIR, created PATH shims in $BIN_DIR, and registered the user-level MCP server."
