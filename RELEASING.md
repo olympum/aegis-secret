@@ -107,7 +107,7 @@ At release time:
 ./scripts/package-release-assets.sh v0.1.0
 ```
 
-4. Notarize and staple the DMG:
+4. Sign, notarize, and staple the DMG:
 
 ```bash
 ./scripts/notarize-dmg.sh v0.1.0

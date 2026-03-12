@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/release-common.sh"
 
 load_release_env
 
+require_command codesign
 require_command xcrun
 require_command spctl
 
@@ -22,9 +23,10 @@ fi
 
 require_value "$NOTARY_PROFILE" "AEGIS_SECRET_NOTARY_PROFILE"
 
+codesign --force --sign "Developer ID Application" --timestamp "$DMG_PATH"
 xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG_PATH"
-spctl --assess --type open -vv "$DMG_PATH"
+spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH"
 
 echo "Notarized and stapled disk image:"
 echo "  $DMG_PATH"
