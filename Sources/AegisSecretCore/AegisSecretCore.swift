@@ -5,6 +5,7 @@ import Security
 public let aegisSecretServiceName = "Aegis Secrets"
 public let aegisSecretMetadataServiceName = "Aegis Secrets Metadata"
 public let commandsFileEnvironmentKey = "AEGIS_SECRET_COMMANDS_FILE"
+public let systemCommandsFileEnvironmentKey = "AEGIS_SECRET_SYSTEM_COMMANDS_FILE"
 
 public enum ExitCode: Int32 {
     case success = 0
@@ -279,7 +280,8 @@ public struct KeychainSecretStore: SecretStore {
 
 public struct WrappedCommandConfig: Codable, Equatable, Sendable {
     public let name: String
-    public let command: String
+    public let enabled: Bool?
+    public let command: String?
     public let description: String?
     public let approvalWindowSeconds: Int?
     public let timeoutSeconds: Int?
@@ -291,7 +293,8 @@ public struct WrappedCommandConfig: Codable, Equatable, Sendable {
 
     public init(
         name: String,
-        command: String,
+        enabled: Bool? = nil,
+        command: String? = nil,
         description: String? = nil,
         approvalWindowSeconds: Int? = nil,
         timeoutSeconds: Int? = nil,
@@ -302,6 +305,7 @@ public struct WrappedCommandConfig: Codable, Equatable, Sendable {
         environment: [String: String]? = nil
     ) {
         self.name = name
+        self.enabled = enabled
         self.command = command
         self.description = description
         self.approvalWindowSeconds = approvalWindowSeconds
@@ -315,6 +319,7 @@ public struct WrappedCommandConfig: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name
+        case enabled
         case command
         case description
         case approvalWindowSeconds = "approval_window_seconds"
@@ -326,13 +331,29 @@ public struct WrappedCommandConfig: Codable, Equatable, Sendable {
         case environment
     }
 
+    public func merged(over base: WrappedCommandConfig?) -> WrappedCommandConfig {
+        WrappedCommandConfig(
+            name: name,
+            enabled: enabled ?? base?.enabled,
+            command: command ?? base?.command,
+            description: description ?? base?.description,
+            approvalWindowSeconds: approvalWindowSeconds ?? base?.approvalWindowSeconds,
+            timeoutSeconds: timeoutSeconds ?? base?.timeoutSeconds,
+            maxOutputBytes: maxOutputBytes ?? base?.maxOutputBytes,
+            denyPrefixes: denyPrefixes ?? base?.denyPrefixes,
+            allowPrefixes: allowPrefixes ?? base?.allowPrefixes,
+            denyFlags: denyFlags ?? base?.denyFlags,
+            environment: environment ?? base?.environment
+        )
+    }
+
     public func resolved() throws -> ResolvedWrappedCommand {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw AegisSecretError.runtime("Wrapped command names cannot be empty.")
         }
 
-        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCommand = command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedCommand.isEmpty else {
             throw AegisSecretError.runtime("Wrapped command `\(trimmedName)` is missing `command`.")
         }
@@ -523,15 +544,9 @@ public final class CommandStore: @unchecked Sendable {
     }
 
     public func rawFile(optionalIfMissing: Bool = true) throws -> CommandFile {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            if optionalIfMissing {
-                return CommandFile.defaultTemplate()
-            }
-            throw AegisSecretError.runtime("Commands file not found at `\(fileURL.path)`.")
-        }
-
-        let data = try Data(contentsOf: fileURL)
-        return try JSONDecoder().decode(CommandFile.self, from: data)
+        let systemFile = try rawSystemFile()
+        let userFile = try rawUserFile(optionalIfMissing: optionalIfMissing)
+        return try mergedFile(system: systemFile, user: userFile)
     }
 
     public func resolvedCommands(optionalIfMissing: Bool = true) throws -> [ResolvedWrappedCommand] {
@@ -581,10 +596,7 @@ public final class CommandStore: @unchecked Sendable {
         let sourceURL = URL(fileURLWithPath: expandUserPath(sourcePath))
         let data = try Data(contentsOf: sourceURL)
         let file = try JSONDecoder().decode(CommandFile.self, from: data)
-        guard file.version == 1 else {
-            throw AegisSecretError.runtime("Unsupported commands file version `\(file.version)`.")
-        }
-        _ = try file.commands.map { try $0.resolved() }
+        _ = try mergedFile(system: rawSystemFile(), user: file)
 
         try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
@@ -603,20 +615,8 @@ public final class CommandStore: @unchecked Sendable {
         let url = URL(fileURLWithPath: expandUserPath(path))
         let data = try Data(contentsOf: url)
         let file = try JSONDecoder().decode(CommandFile.self, from: data)
-        guard file.version == 1 else {
-            throw AegisSecretError.runtime("Unsupported commands file version `\(file.version)`.")
-        }
-        _ = try file.commands.map { try $0.resolved() }
-        return file.commands.count
-    }
-
-    public func writeDefaultFileIfMissing() throws {
-        guard !fileManager.fileExists(atPath: fileURL.path) else {
-            return
-        }
-
-        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try prettyJSON(CommandFile.defaultTemplate()).write(to: fileURL, options: .atomic)
+        let merged = try mergedFile(system: rawSystemFile(), user: file)
+        return merged.commands.count
     }
 
     public func resolveExecutable(named executableName: String) -> URL? {
@@ -637,6 +637,80 @@ public final class CommandStore: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    private func rawSystemFile() throws -> CommandFile {
+        guard let systemURL = systemFileURL() else {
+            return CommandFile.defaultTemplate()
+        }
+
+        let data = try Data(contentsOf: systemURL)
+        return try JSONDecoder().decode(CommandFile.self, from: data)
+    }
+
+    private func rawUserFile(optionalIfMissing: Bool) throws -> CommandFile {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            if optionalIfMissing {
+                return CommandFile(version: 1, commands: [])
+            }
+            return CommandFile(version: 1, commands: [])
+        }
+
+        let data = try Data(contentsOf: fileURL)
+        return try JSONDecoder().decode(CommandFile.self, from: data)
+    }
+
+    private func systemFileURL() -> URL? {
+        if let override = environment[systemCommandsFileEnvironmentKey]?.trimmedNonEmpty {
+            return URL(fileURLWithPath: expandUserPath(override))
+        }
+
+        return Bundle.main.url(forResource: "commands.default", withExtension: "json")
+    }
+
+    private func mergedFile(system: CommandFile, user: CommandFile) throws -> CommandFile {
+        guard system.version == 1 else {
+            throw AegisSecretError.runtime("Unsupported commands file version `\(system.version)`.")
+        }
+        guard user.version == 1 else {
+            throw AegisSecretError.runtime("Unsupported commands file version `\(user.version)`.")
+        }
+
+        try validateUniqueNames(system.commands, label: "system commands")
+        try validateUniqueNames(user.commands, label: "user commands")
+
+        var mergedByName: [String: WrappedCommandConfig] = [:]
+        var orderedNames: [String] = []
+
+        for command in system.commands {
+            mergedByName[command.name] = command
+            orderedNames.append(command.name)
+        }
+
+        for command in user.commands {
+            let merged = command.merged(over: mergedByName[command.name])
+            if merged.enabled == false {
+                mergedByName.removeValue(forKey: command.name)
+                orderedNames.removeAll { $0 == command.name }
+                continue
+            }
+
+            if mergedByName[command.name] == nil {
+                orderedNames.append(command.name)
+            }
+            mergedByName[command.name] = merged
+        }
+
+        let mergedCommands = orderedNames.compactMap { mergedByName[$0] }
+        _ = try mergedCommands.map { try $0.resolved() }
+        return CommandFile(version: 1, commands: mergedCommands)
+    }
+
+    private func validateUniqueNames(_ commands: [WrappedCommandConfig], label: String) throws {
+        let names = commands.map(\.name)
+        if Set(names).count != names.count {
+            throw AegisSecretError.runtime("The \(label) contain duplicate wrapped command names.")
+        }
     }
 }
 
@@ -1339,8 +1413,6 @@ public struct UserInstaller {
         guard !appBundleURL.path.hasPrefix("/Volumes/") else {
             throw AegisSecretError.runtime("Run `install-user` after copying Aegis Secret.app to /Applications or ~/Applications.")
         }
-
-        try commandStore.writeDefaultFileIfMissing()
 
         let executableURL = appBundleURL.appendingPathComponent("Contents/MacOS/aegis-secret")
         let binDirectory = fileManager.homeDirectoryForCurrentUser

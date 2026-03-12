@@ -139,6 +139,37 @@ final class AegisSecretCoreTests: XCTestCase {
         XCTAssertEqual(names, ["aws", "gcloud", "gh"])
     }
 
+    func testCommandStoreMergesSystemAndUserOverrides() throws {
+        let tempDirectory = try temporaryDirectory()
+        let systemFile = tempDirectory.appendingPathComponent("system-commands.json")
+        let userFile = tempDirectory.appendingPathComponent("commands.json")
+
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", command: "gh", approvalWindowSeconds: 300),
+                WrappedCommandConfig(name: "aws", command: "aws", approvalWindowSeconds: 300)
+            ])
+        ).write(to: systemFile)
+
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(name: "gh", approvalWindowSeconds: 0),
+                WrappedCommandConfig(name: "aws", enabled: false),
+                WrappedCommandConfig(name: "kubectl", command: "kubectl", approvalWindowSeconds: 120)
+            ])
+        ).write(to: userFile)
+
+        let store = CommandStore(
+            fileURL: userFile,
+            environment: [systemCommandsFileEnvironmentKey: systemFile.path]
+        )
+
+        let commands = try store.resolvedCommands()
+        XCTAssertEqual(commands.map(\.name), ["gh", "kubectl"])
+        XCTAssertEqual(commands.first(where: { $0.name == "gh" })?.approvalWindowSeconds, 0)
+        XCTAssertEqual(commands.first(where: { $0.name == "kubectl" })?.command, "kubectl")
+    }
+
     func testCommandStoreValidateFileRejectsDuplicateNames() throws {
         let tempDirectory = try temporaryDirectory()
         let commandFile = tempDirectory.appendingPathComponent("commands.json")
@@ -157,11 +188,16 @@ final class AegisSecretCoreTests: XCTestCase {
 
     func testRunnerRejectsUnknownWrappedCommand() async throws {
         let tempDirectory = try temporaryDirectory()
+        let systemFile = tempDirectory.appendingPathComponent("system-commands.json")
         let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(CommandFile(commands: [])).write(to: systemFile)
         try prettyJSON(CommandFile(commands: [])).write(to: commandFile)
 
         let runner = WrappedCommandRunner(
-            commandStore: CommandStore(fileURL: commandFile),
+            commandStore: CommandStore(
+                fileURL: commandFile,
+                environment: [systemCommandsFileEnvironmentKey: systemFile.path]
+            ),
             authenticator: AuthRecorder(),
             executor: MockCommandExecutor { _ in
                 XCTFail("executor should not run")

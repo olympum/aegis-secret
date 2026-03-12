@@ -112,12 +112,25 @@ This keeps adoption easy:
 - let agents use the real CLI they already know
 - tighten rules later only if you need to
 
-## Default Commands File
+## System Defaults And User Overrides
 
-On first install, Aegis writes `~/.config/aegis-secret/commands.json` if it does
-not already exist.
+Aegis ships with a system command set and a separate user override file.
 
-Start from [`examples/commands.example.json`](examples/commands.example.json):
+System defaults:
+
+- live in the installed app bundle
+- are updated when you install a new release
+- include `gh`, `aws`, and `gcloud`
+
+User overrides:
+
+- live at `~/.config/aegis-secret/commands.json`
+- can override shipped settings for a wrapped command
+- can disable a shipped wrapped command
+- can add new wrapped commands
+
+Start from [`examples/commands.example.json`](examples/commands.example.json)
+for a user override file:
 
 ```json
 {
@@ -125,26 +138,29 @@ Start from [`examples/commands.example.json`](examples/commands.example.json):
   "commands": [
     {
       "name": "gh",
-      "command": "gh",
-      "description": "GitHub CLI",
+      "approval_window_seconds": 0
+    },
+    {
+      "name": "aws",
+      "enabled": false
+    },
+    {
+      "name": "kubectl",
+      "command": "kubectl",
+      "description": "Kubernetes CLI",
       "approval_window_seconds": 300,
       "timeout_seconds": 30,
-      "max_output_bytes": 262144,
-      "deny_prefixes": [["auth"], ["alias"], ["extension"]],
-      "deny_flags": ["--hostname"]
+      "max_output_bytes": 262144
     }
   ]
 }
 ```
 
-The shipped defaults cover:
+That example does three things:
 
-- `gh`
-- `aws`
-- `gcloud`
-
-with built-in deny rules for obvious credential-printing and auth-management
-subcommands.
+- makes `gh` prompt every time
+- disables the shipped `aws` wrapper
+- adds a new `kubectl` wrapper
 
 ## CLI Reference
 
