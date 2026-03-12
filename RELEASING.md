@@ -46,6 +46,16 @@ install it in the login keychain of the release machine.
 Create a `notarytool` keychain profile or equivalent notarization credentials on
 the release machine.
 
+Suggested local config file:
+
+```bash
+mkdir -p ~/.config/aegis-secret
+cat > ~/.config/aegis-secret/release.env <<'EOF'
+AEGIS_SECRET_RELEASE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+AEGIS_SECRET_NOTARY_PROFILE="AegisSecretRelease"
+EOF
+```
+
 ### 3. Verify local signing
 
 Confirm the signing identity exists:
@@ -60,14 +70,35 @@ You should see a `Developer ID Application: ...` identity for the release user.
 
 At release time:
 
-1. Build the Release app with the Xcode project.
-2. Sign with `Developer ID Application`.
-3. Archive the app as a `.zip`.
-4. Submit the app for notarization.
-5. Staple the notarization ticket.
-6. Verify Gatekeeper acceptance locally.
-7. Generate checksums.
-8. Upload the app zip and checksums to a GitHub Release.
+1. Build the Release app:
+
+```bash
+./scripts/build-release.sh v0.1.0
+```
+
+2. Notarize and staple it:
+
+```bash
+./scripts/notarize-release.sh v0.1.0
+```
+
+3. Package release assets:
+
+```bash
+./scripts/package-release-assets.sh v0.1.0
+```
+
+4. Create a draft GitHub release:
+
+```bash
+./scripts/create-github-release.sh v0.1.0
+```
+
+Or run the full local release pipeline:
+
+```bash
+./scripts/release-binary.sh v0.1.0
+```
 
 ## Verification Checklist
 
@@ -88,3 +119,17 @@ Recommended follow-up automation:
 - a tag-driven release workflow that builds, signs, notarizes, checksums, and
   uploads release assets
 - release notes generated from tags or a changelog
+
+The repository includes:
+
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+
+The release workflow expects these GitHub secrets:
+
+- `APPLE_TEAM_ID`
+- `DEVELOPER_ID_APPLICATION_P12_BASE64`
+- `DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `NOTARY_APPLE_ID`
+- `NOTARY_APP_SPECIFIC_PASSWORD`
+- optionally `DEVELOPER_ID_PROVISIONING_PROFILE_BASE64`

@@ -87,6 +87,26 @@ Not:
 
 ## Install
 
+### Binary Release
+
+When GitHub release assets are available, install from a notarized binary instead
+of building from source:
+
+1. Download `Aegis Secret-<version>-macOS.zip`.
+2. Download `install-downloaded-app.sh`.
+3. Unzip the app.
+4. Run:
+
+```bash
+./install-downloaded-app.sh "./Aegis Secret.app"
+```
+
+The helper copies the app into `~/Applications`, creates `aegis-secret` and
+`aegis-secret-mcp` shims in `~/.local/bin`, and registers the user-scoped MCP
+server for Codex and Claude when those CLIs are present.
+
+### Build From Source
+
 Store your Xcode development team ID once:
 
 ```bash
@@ -127,7 +147,7 @@ If the installer says it cannot find or create a provisioning profile, do this o
 4. Build the app once in Xcode.
 5. Rerun `./scripts/install-user-mcp.sh`.
 
-This installs:
+This source-build path installs:
 
 - `~/.local/bin/aegis-secret`
 - `~/.local/bin/aegis-secret-mcp`
