@@ -114,24 +114,32 @@ This keeps adoption easy:
 
 ## System Defaults And User Overrides
 
-Aegis ships with a system command set and a separate user override file.
+Aegis uses two visible config files under `~/.config/aegis-secret`:
 
-System defaults:
+- managed base file: `commands.base.json`
+- user override file: `commands.json`
 
-- live in the installed app bundle
-- are updated when you install a new release
-- include `gh`, `aws`, and `gcloud`
+The model is intentionally simple:
 
-User overrides:
+- Aegis replaces `commands.base.json` on install and upgrade.
+- Users edit `commands.json`.
+- The effective wrapped-command set is `commands.base.json`, overlaid by
+  `commands.json`.
 
-- live at `~/.config/aegis-secret/commands.json`
+The managed base file includes the shipped defaults for:
+
+- `gh`
+- `aws`
+- `gcloud`
+
+The user override file:
+
 - can override shipped settings for a wrapped command
 - can disable a shipped wrapped command
 - can add new wrapped commands
 
-Both the package installer and `aegis-secret install-user` create
-`~/.config/aegis-secret/commands.json` if it does not exist yet. It starts as an
-empty override file:
+Both the package installer and `aegis-secret install-user` create these files if
+needed. The user file starts empty:
 
 ```json
 {

@@ -6,6 +6,7 @@ public let aegisSecretServiceName = "Aegis Secrets"
 public let aegisSecretMetadataServiceName = "Aegis Secrets Metadata"
 public let commandsFileEnvironmentKey = "AEGIS_SECRET_COMMANDS_FILE"
 public let systemCommandsFileEnvironmentKey = "AEGIS_SECRET_SYSTEM_COMMANDS_FILE"
+public let bundledCommandsResourceName = "commands.default"
 
 public enum ExitCode: Int32 {
     case success = 0
@@ -536,11 +537,24 @@ public final class CommandStore: @unchecked Sendable {
             return URL(fileURLWithPath: expandUserPath(override))
         }
 
+        return defaultConfigDirectory()
+            .appendingPathComponent("commands.json", isDirectory: false)
+    }
+
+    public static func defaultSystemURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let override = environment[systemCommandsFileEnvironmentKey]?.trimmedNonEmpty {
+            return URL(fileURLWithPath: expandUserPath(override))
+        }
+
+        return defaultConfigDirectory()
+            .appendingPathComponent("commands.base.json", isDirectory: false)
+    }
+
+    private static func defaultConfigDirectory() -> URL {
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         return homeDirectory
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("aegis-secret", isDirectory: true)
-            .appendingPathComponent("commands.json", isDirectory: false)
     }
 
     public func rawFile(optionalIfMissing: Bool = true) throws -> CommandFile {
@@ -628,6 +642,20 @@ public final class CommandStore: @unchecked Sendable {
         try prettyJSON(CommandFile(version: 1, commands: [])).write(to: fileURL, options: .atomic)
     }
 
+    public func writeManagedSystemFile() throws {
+        let systemURL = CommandStore.defaultSystemURL(environment: environment)
+        try fileManager.createDirectory(at: systemURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        if let bundledURL = bundledSystemFileURL() {
+            let data = try Data(contentsOf: bundledURL)
+            _ = try JSONDecoder().decode(CommandFile.self, from: data)
+            try data.write(to: systemURL, options: .atomic)
+            return
+        }
+
+        try prettyJSON(CommandFile.defaultTemplate()).write(to: systemURL, options: .atomic)
+    }
+
     public func resolveExecutable(named executableName: String) -> URL? {
         if executableName.contains("/") {
             let url = URL(fileURLWithPath: expandUserPath(executableName))
@@ -649,12 +677,18 @@ public final class CommandStore: @unchecked Sendable {
     }
 
     private func rawSystemFile() throws -> CommandFile {
-        guard let systemURL = systemFileURL() else {
-            return CommandFile.defaultTemplate()
+        let systemURL = CommandStore.defaultSystemURL(environment: environment)
+        if fileManager.fileExists(atPath: systemURL.path) {
+            let data = try Data(contentsOf: systemURL)
+            return try JSONDecoder().decode(CommandFile.self, from: data)
         }
 
-        let data = try Data(contentsOf: systemURL)
-        return try JSONDecoder().decode(CommandFile.self, from: data)
+        if let bundledURL = bundledSystemFileURL() {
+            let data = try Data(contentsOf: bundledURL)
+            return try JSONDecoder().decode(CommandFile.self, from: data)
+        }
+
+        return CommandFile.defaultTemplate()
     }
 
     private func rawUserFile(optionalIfMissing: Bool) throws -> CommandFile {
@@ -669,12 +703,8 @@ public final class CommandStore: @unchecked Sendable {
         return try JSONDecoder().decode(CommandFile.self, from: data)
     }
 
-    private func systemFileURL() -> URL? {
-        if let override = environment[systemCommandsFileEnvironmentKey]?.trimmedNonEmpty {
-            return URL(fileURLWithPath: expandUserPath(override))
-        }
-
-        return Bundle.main.url(forResource: "commands.default", withExtension: "json")
+    private func bundledSystemFileURL() -> URL? {
+        Bundle.main.url(forResource: bundledCommandsResourceName, withExtension: "json")
     }
 
     private func mergedFile(system: CommandFile, user: CommandFile) throws -> CommandFile {
@@ -1390,7 +1420,7 @@ Notes:
   `set` reads from the terminal by default, or from stdin when piped / passed `--stdin`.
   `get` is for explicit human use and reveals the raw secret on stdout after device-owner authentication.
   `install-user` creates PATH shims in `~/.local/bin` and registers user-scoped MCP integrations for installed Codex / Claude CLIs.
-  Wrapped commands default to `~/.config/aegis-secret/commands.json` unless `AEGIS_SECRET_COMMANDS_FILE` is set.
+  Aegis reads a managed base file from `~/.config/aegis-secret/commands.base.json` and overlays user changes from `~/.config/aegis-secret/commands.json`.
 """
 
 public struct UserInstallationSummary {
@@ -1423,6 +1453,7 @@ public struct UserInstaller {
             throw AegisSecretError.runtime("Run `install-user` after copying Aegis Secret.app to /Applications or ~/Applications.")
         }
 
+        try commandStore.writeManagedSystemFile()
         try commandStore.writeUserOverrideFileIfMissing()
 
         let executableURL = appBundleURL.appendingPathComponent("Contents/MacOS/aegis-secret")
