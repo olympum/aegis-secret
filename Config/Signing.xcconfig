@@ -1,0 +1,4 @@
+CODE_SIGN_STYLE = Automatic
+
+// Local-only overrides for interactive Xcode builds.
+#include? "Signing.local.xcconfig"

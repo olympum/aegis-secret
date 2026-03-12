@@ -58,6 +58,13 @@ codex mcp get aegis-secret
 claude mcp list
 ```
 
+If the installer reports a missing provisioning profile, open `Aegis Secret.xcodeproj`
+in Xcode, choose your paid team in Signing & Capabilities, build once, and rerun
+the installer.
+
+For local Xcode builds, set your team in `Config/Signing.local.xcconfig`.
+That file is gitignored and should never be committed.
+
 ## Code Style
 
 - Keep the default agent path policy-based rather than raw-secret-based.

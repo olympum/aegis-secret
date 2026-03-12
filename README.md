@@ -7,6 +7,9 @@ Named-policy secret broker for agent workflows on macOS.
 Keep secrets in Keychain, expose named policies to agents, and avoid
 `.env` files as the default workflow.
 
+Biometric-only secret access on macOS requires a signed install. Aegis Secret
+targets the Data Protection keychain on macOS.
+
 ## What Is A Policy?
 
 A secret is the raw credential, like `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
@@ -65,7 +68,7 @@ Example:
    - body: `{...}`
 5. The local broker then:
    - reads `OPENAI_API_KEY` from Keychain
-   - prompts for Touch ID/password
+   - prompts for Touch ID
    - injects the auth header locally
    - sends the request to OpenAI
    - returns the API response
@@ -84,16 +87,51 @@ Not:
 
 ## Install
 
+Store your Xcode development team ID once:
+
+```bash
+mkdir -p ~/.config/aegis-secret
+cat > ~/.config/aegis-secret/install.env <<'EOF'
+AEGIS_SECRET_TEAM_ID=YOURTEAMID
+EOF
+```
+
+If you want Xcode.app builds to work without editing the project file, create the
+repo-local override once:
+
+```bash
+cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig
+```
+
+Then set your team ID in `Config/Signing.local.xcconfig`. That file is gitignored.
+
+Then run the installer:
+
 ```bash
 git clone https://github.com/olympum/aegis-secret.git
 cd aegis-secret
 ./scripts/install-user-mcp.sh
 ```
 
+You can also override it per-run with:
+
+```bash
+export AEGIS_SECRET_TEAM_ID="YOURTEAMID"
+```
+
+If the installer says it cannot find or create a provisioning profile, do this once:
+
+1. Open `Aegis Secret.xcodeproj` in Xcode.
+2. Select the `Aegis Secret` target.
+3. In Signing & Capabilities, choose your paid Apple Developer team.
+4. Build the app once in Xcode.
+5. Rerun `./scripts/install-user-mcp.sh`.
+
 This installs:
 
 - `~/.local/bin/aegis-secret`
 - `~/.local/bin/aegis-secret-mcp`
+- `~/Applications/Aegis Secret.app`
 
 and registers a user-scoped MCP server for Codex and Claude when those CLIs are present.
 
@@ -181,7 +219,8 @@ swift build
 swift test
 ```
 
-If you want to run from source instead of installing first, use `swift run aegis-secret ...`.
+Running from source is fine for development and tests, but the real biometric-only
+workflow uses the signed app bundle created by `./scripts/install-user-mcp.sh`.
 
 ## License
 

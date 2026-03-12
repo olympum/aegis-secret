@@ -2,10 +2,6 @@ import AegisSecretCore
 import Foundation
 import XCTest
 
-final class NoopAuthenticator: DeviceAuthenticator {
-    func authenticate(reason: String) async throws {}
-}
-
 struct InMemorySecretStore: SecretStore {
     var secrets: [String: Data]
 
@@ -32,6 +28,56 @@ struct InMemorySecretStore: SecretStore {
 
     func secretExists(for key: String) throws -> Bool {
         secrets[key] != nil
+    }
+}
+
+final class TrackingSecretStore: SecretStore, @unchecked Sendable {
+    private let events: EventLog
+    private let secrets: [String: Data]
+
+    init(events: EventLog, secrets: [String: Data]) {
+        self.events = events
+        self.secrets = secrets
+    }
+
+    func setSecret(_ secretData: Data, for key: String) throws {}
+
+    func readSecret(for key: String) throws -> Data {
+        events.append("read")
+        guard let secret = secrets[key] else {
+            throw AegisSecretError.runtime("missing secret")
+        }
+        return secret
+    }
+
+    func readSecret(for key: String, reason: String) throws -> Data {
+        events.append("read")
+        events.append("reason:\(reason)")
+        guard let secret = secrets[key] else {
+            throw AegisSecretError.runtime("missing secret")
+        }
+        return secret
+    }
+
+    func deleteSecret(for key: String) throws -> Bool {
+        secrets[key] != nil
+    }
+
+    func listSecrets() throws -> [SecretListItem] {
+        secrets.keys.sorted().map(SecretListItem.init(key:))
+    }
+
+    func secretExists(for key: String) throws -> Bool {
+        events.append("exists")
+        return secrets[key] != nil
+    }
+}
+
+final class EventLog {
+    private(set) var values: [String] = []
+
+    func append(_ value: String) {
+        values.append(value)
     }
 }
 
@@ -124,7 +170,6 @@ final class AegisSecretCoreTests: XCTestCase {
         let broker = HTTPPolicyBroker(
             policyStore: PolicyStore(fileURL: policyFile),
             secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
-            authenticator: NoopAuthenticator(),
             session: MockHTTPSession { _ in
                 XCTFail("network call should not run")
                 throw URLError(.badServerResponse)
@@ -179,7 +224,6 @@ final class AegisSecretCoreTests: XCTestCase {
         let broker = HTTPPolicyBroker(
             policyStore: PolicyStore(fileURL: policyFile),
             secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
-            authenticator: NoopAuthenticator(),
             session: session
         )
 
@@ -198,6 +242,49 @@ final class AegisSecretCoreTests: XCTestCase {
         XCTAssertEqual(response.status, 200)
         XCTAssertEqual(response.body, #"{"ok":true}"#)
         XCTAssertNil(response.bodyBase64)
+    }
+
+    func testBrokerReadsSecretOnceWithPromptReason() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let policyFile = tempDirectory.appendingPathComponent("policies.json")
+        try prettyJSON(
+            PolicyFile(policies: [
+                PolicyConfig(
+                    name: "gemini-api",
+                    secretKey: "GEMINI_API_KEY",
+                    baseURL: "https://generativelanguage.googleapis.com",
+                    allowedMethods: ["POST"],
+                    authMode: .header,
+                    headerName: "x-goog-api-key",
+                    allowedPathPrefixes: ["/v1beta/models"]
+                )
+            ])
+        ).write(to: policyFile)
+
+        let events = EventLog()
+        let broker = HTTPPolicyBroker(
+            policyStore: PolicyStore(fileURL: policyFile),
+            secretStore: TrackingSecretStore(events: events, secrets: ["GEMINI_API_KEY": Data("secret".utf8)]),
+            session: MockHTTPSession { request in
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (Data(#"{"ok":true}"#.utf8), response)
+            }
+        )
+
+        _ = try await broker.request(
+            policy: "gemini-api",
+            request: BrokerRequest(method: "POST", path: "/v1beta/models/gemini-2.5-pro:generateContent"),
+            requester: "Test"
+        )
+
+        XCTAssertEqual(events.values.count, 2)
+        XCTAssertEqual(events.values.first, "read")
+        XCTAssertTrue(events.values.last?.contains("Allow Test to use policy 'gemini-api' for POST /v1beta/models/gemini-2.5-pro:generateContent.") == true)
     }
 
     private func temporaryDirectory() throws -> URL {

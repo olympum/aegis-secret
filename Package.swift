@@ -17,13 +17,6 @@ let package = Package(
             name: "aegis-secret",
             targets: ["aegis-secret"]
         ),
-        .executable(
-            name: "aegis-secret-mcp",
-            targets: ["aegis-secret-mcp"]
-        ),
-    ],
-    dependencies: [
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0")
     ],
     targets: [
         .target(
@@ -32,13 +25,6 @@ let package = Package(
         .executableTarget(
             name: "aegis-secret",
             dependencies: ["AegisSecretCore"]
-        ),
-        .executableTarget(
-            name: "aegis-secret-mcp",
-            dependencies: [
-                "AegisSecretCore",
-                .product(name: "MCP", package: "swift-sdk")
-            ]
         ),
         .testTarget(
             name: "AegisSecretCoreTests",

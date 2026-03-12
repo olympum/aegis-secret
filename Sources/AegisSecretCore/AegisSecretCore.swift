@@ -3,6 +3,7 @@ import LocalAuthentication
 import Security
 
 public let aegisSecretServiceName = "Aegis Secrets"
+public let aegisSecretMetadataServiceName = "Aegis Secrets Metadata"
 public let policiesFileEnvironmentKey = "AEGIS_SECRET_POLICIES_FILE"
 
 public enum ExitCode: Int32 {
@@ -32,15 +33,16 @@ public final class LocalDeviceAuthenticator: DeviceAuthenticator, @unchecked Sen
 
     public func authenticate(reason: String) async throws {
         let context = LAContext()
+        context.localizedFallbackTitle = ""
         var evaluationError: NSError?
 
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &evaluationError) else {
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &evaluationError) else {
             let details = evaluationError?.localizedDescription ?? "Unknown authentication error"
-            throw AegisSecretError.runtime("Device owner authentication is unavailable: \(details).")
+            throw AegisSecretError.runtime("Biometric authentication is unavailable: \(details).")
         }
 
         try await withCheckedThrowingContinuation { continuation in
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, error in
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
                 if success {
                     continuation.resume()
                     return
@@ -67,16 +69,28 @@ public struct SecretListItem: Equatable, Codable, Sendable {
 public protocol SecretStore: Sendable {
     func setSecret(_ secretData: Data, for key: String) throws
     func readSecret(for key: String) throws -> Data
+    func readSecret(for key: String, reason: String) throws -> Data
     func deleteSecret(for key: String) throws -> Bool
     func listSecrets() throws -> [SecretListItem]
     func secretExists(for key: String) throws -> Bool
 }
 
+public extension SecretStore {
+    func readSecret(for key: String, reason: String) throws -> Data {
+        try readSecret(for: key)
+    }
+}
+
 public struct KeychainSecretStore: SecretStore {
     public let serviceName: String
+    public let metadataServiceName: String
 
-    public init(serviceName: String = aegisSecretServiceName) {
+    public init(
+        serviceName: String = aegisSecretServiceName,
+        metadataServiceName: String = aegisSecretMetadataServiceName
+    ) {
         self.serviceName = serviceName
+        self.metadataServiceName = metadataServiceName
     }
 
     public func setSecret(_ secretData: Data, for key: String) throws {
@@ -86,26 +100,48 @@ public struct KeychainSecretStore: SecretStore {
             throw AegisSecretError.runtime("Unable to replace existing secret `\(key)`: \(message(for: deleteStatus)).")
         }
 
+        var accessControlError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .biometryCurrentSet,
+            &accessControlError
+        ) else {
+            let details = accessControlError?.takeRetainedValue().localizedDescription ?? "Unknown access control error"
+            throw AegisSecretError.runtime("Unable to create access control for secret `\(key)`: \(details).")
+        }
+
         var addQuery = baseQuery(for: key)
         addQuery[kSecValueData as String] = secretData
         addQuery[kSecAttrLabel as String] = "Aegis secret: \(key)"
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+        addQuery[kSecAttrAccessControl as String] = accessControl
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
-            throw AegisSecretError.runtime("Unable to store secret `\(key)`: \(message(for: addStatus)).")
+            throw AegisSecretError.runtime(storageErrorMessage(for: key, status: addStatus))
         }
+
+        try upsertMetadata(for: key)
     }
 
     public func readSecret(for key: String) throws -> Data {
+        try readSecret(for: key, reason: "Access the secret named '\(key)'.")
+    }
+
+    public func readSecret(for key: String, reason: String) throws -> Data {
+        let context = LAContext()
+        context.localizedReason = reason
+        context.localizedFallbackTitle = ""
+
         var query = baseQuery(for: key)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationContext as String] = context
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
-            throw AegisSecretError.runtime("Unable to retrieve secret `\(key)`: \(message(for: status)).")
+            throw AegisSecretError.runtime(readErrorMessage(for: key, status: status))
         }
 
         guard let data = item as? Data else {
@@ -117,6 +153,11 @@ public struct KeychainSecretStore: SecretStore {
 
     public func deleteSecret(for key: String) throws -> Bool {
         let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
+        let metadataStatus = SecItemDelete(metadataQuery(for: key) as CFDictionary)
+        guard metadataStatus == errSecSuccess || metadataStatus == errSecItemNotFound else {
+            throw AegisSecretError.runtime("Unable to update secret index for `\(key)`: \(message(for: metadataStatus)).")
+        }
+
         switch status {
         case errSecSuccess:
             return true
@@ -128,41 +169,24 @@ public struct KeychainSecretStore: SecretStore {
     }
 
     public func listSecrets() throws -> [SecretListItem] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll
-        ]
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        switch status {
-        case errSecSuccess:
-            guard let dictionaries = item as? [[String: Any]] else {
-                throw AegisSecretError.runtime("Keychain returned an unexpected response while listing secrets.")
-            }
-            return dictionaries
-                .compactMap { dictionary in
-                    (dictionary[kSecAttrAccount as String] as? String).map(SecretListItem.init(key:))
-                }
-                .sorted { $0.key < $1.key }
-        case errSecItemNotFound:
-            return []
-        default:
-            throw AegisSecretError.runtime("Unable to list secrets: \(message(for: status)).")
-        }
+        try listMetadataKeys()
     }
 
     public func secretExists(for key: String) throws -> Bool {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+
         var query = baseQuery(for: key)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationContext as String] = context
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
         case errSecSuccess:
+            return true
+        case errSecInteractionNotAllowed:
             return true
         case errSecItemNotFound:
             return false
@@ -175,8 +199,85 @@ public struct KeychainSecretStore: SecretStore {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: key,
+            kSecUseDataProtectionKeychain as String: true
         ]
+    }
+
+    private func metadataQuery(for key: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: metadataServiceName,
+            kSecAttrAccount as String: key,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+
+    private func upsertMetadata(for key: String) throws {
+        let deleteStatus = SecItemDelete(metadataQuery(for: key) as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            throw AegisSecretError.runtime("Unable to update secret index for `\(key)`: \(message(for: deleteStatus)).")
+        }
+
+        var addQuery = metadataQuery(for: key)
+        addQuery[kSecValueData as String] = Data()
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        addQuery[kSecAttrLabel as String] = "Aegis secret metadata: \(key)"
+
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw AegisSecretError.runtime("Unable to update secret index for `\(key)`: \(message(for: status)).")
+        }
+    }
+
+    private func listMetadataKeys() throws -> [SecretListItem] {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: metadataServiceName,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecUseAuthenticationContext as String: context,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let dictionaries = item as? [[String: Any]] else {
+                throw AegisSecretError.runtime("Keychain returned an unexpected response while listing secrets.")
+            }
+            return dictionaries.compactMap { dictionary in
+                (dictionary[kSecAttrAccount as String] as? String).map(SecretListItem.init(key:))
+            }
+        case errSecItemNotFound:
+            return []
+        case errSecInteractionNotAllowed:
+            return []
+        default:
+            throw AegisSecretError.runtime("Unable to list secrets: \(message(for: status)).")
+        }
+    }
+
+    private func storageErrorMessage(for key: String, status: OSStatus) -> String {
+        if status == errSecMissingEntitlement {
+            return """
+            Unable to store secret `\(key)`: the signed Aegis app/helper is missing the entitlement required for the Data Protection keychain. Build and sign the app bundle with a valid Apple code-signing identity before using biometric-only secrets.
+            """
+        }
+        return "Unable to store secret `\(key)`: \(message(for: status))."
+    }
+
+    private func readErrorMessage(for key: String, status: OSStatus) -> String {
+        if status == errSecMissingEntitlement {
+            return """
+            Unable to retrieve secret `\(key)`: the signed Aegis app/helper is missing the entitlement required for the Data Protection keychain. Build and sign the app bundle with a valid Apple code-signing identity before using biometric-only secrets.
+            """
+        }
+        return "Unable to retrieve secret `\(key)`: \(message(for: status))."
     }
 }
 
@@ -506,20 +607,17 @@ extension URLSession: HTTPSession {}
 public struct HTTPPolicyBroker: Sendable {
     public let policyStore: PolicyStore
     public let secretStore: SecretStore
-    public let authenticator: DeviceAuthenticator
     public let session: HTTPSession
     public let maxResponseBytes: Int
 
     public init(
         policyStore: PolicyStore,
         secretStore: SecretStore,
-        authenticator: DeviceAuthenticator,
         session: HTTPSession = URLSession.shared,
         maxResponseBytes: Int = 256 * 1024
     ) {
         self.policyStore = policyStore
         self.secretStore = secretStore
-        self.authenticator = authenticator
         self.session = session
         self.maxResponseBytes = maxResponseBytes
     }
@@ -534,10 +632,6 @@ public struct HTTPPolicyBroker: Sendable {
 
     public func request(policy name: String, request: BrokerRequest, requester: String? = nil) async throws -> BrokerResponse {
         let policy = try policyStore.resolvedPolicy(named: name)
-
-        guard try secretStore.secretExists(for: policy.secretKey) else {
-            throw AegisSecretError.runtime("Policy `\(policy.name)` is configured, but the Keychain secret `\(policy.secretKey)` is missing.")
-        }
 
         let method = request.method.uppercased()
         guard policy.allowedMethods.contains(method) else {
@@ -555,13 +649,11 @@ public struct HTTPPolicyBroker: Sendable {
 
         let protectedHeaderNames = protectedHeaders(for: policy)
         let userHeaders = try validatedUserHeaders(request.headers, protectedHeaderNames: protectedHeaderNames)
-        let secret = try secretStore.readSecret(for: policy.secretKey)
+        let reason = "Allow \(requester ?? "the local policy broker") to use policy '\(policy.name)' for \(method) \(requestURL.path)."
+        let secret = try secretStore.readSecret(for: policy.secretKey, reason: reason)
         guard let secretString = String(data: secret, encoding: .utf8) else {
             throw AegisSecretError.runtime("Secret `\(policy.secretKey)` is not valid UTF-8 and cannot be used for HTTP authentication.")
         }
-
-        let reason = "Allow \(requester ?? "the local policy broker") to use policy '\(policy.name)' for \(method) \(requestURL.path)."
-        try await authenticator.authenticate(reason: reason)
 
         var urlRequest = URLRequest(url: requestURL)
         urlRequest.httpMethod = method
@@ -855,8 +947,7 @@ public struct CLIApplication {
             print("Stored `\(key)` in Keychain.")
         case .get(let key, let agentName):
             let reason = "Allow \(agentName) to access the secret named '\(key)'."
-            try await authenticator.authenticate(reason: reason)
-            let secret = try secretStore.readSecret(for: key)
+            let secret = try secretStore.readSecret(for: key, reason: reason)
             FileHandle.standardOutput.write(secret)
             if isatty(FileHandle.standardOutput.fileDescriptor) != 0 {
                 FileHandle.standardOutput.write(Data([0x0A]))
