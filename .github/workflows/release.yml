@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-26
     env:
       AEGIS_SECRET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       AEGIS_SECRET_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -25,7 +25,18 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Select latest Xcode
+        run: |
+          latest_xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -1)"
+          if [[ -z "$latest_xcode" ]]; then
+            echo "No Xcode installation found on runner" >&2
+            exit 1
+          fi
+          echo "Using Xcode at $latest_xcode"
+          sudo xcode-select -s "$latest_xcode"
+          xcodebuild -version
 
       - name: Import Developer ID certificate
         env:
