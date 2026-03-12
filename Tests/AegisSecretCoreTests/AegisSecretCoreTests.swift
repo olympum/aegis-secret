@@ -237,6 +237,7 @@ final class AegisSecretCoreTests: XCTestCase {
             XCTFail("expected wrapped command to fail")
         } catch let error as AegisSecretError {
             XCTAssertTrue(error.description.contains("not allowed"))
+            XCTAssertTrue(error.description.contains("gh api /user"))
         }
     }
 

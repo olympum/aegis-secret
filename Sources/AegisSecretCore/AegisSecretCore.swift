@@ -1026,8 +1026,21 @@ public struct WrappedCommandRunner: Sendable {
 
         if let matchedPrefix = command.denyPrefixes.first(where: { matchesPrefix(args, prefix: $0) }) {
             let renderedPrefix = matchedPrefix.joined(separator: " ")
-            throw AegisSecretError.runtime("The `\(renderedPrefix)` subcommand is not allowed for wrapped command `\(command.name)`.")
+            let suggestion = deniedPrefixSuggestion(for: command, matchedPrefix: matchedPrefix)
+            throw AegisSecretError.runtime("The `\(renderedPrefix)` subcommand is not allowed for wrapped command `\(command.name)`. \(suggestion)")
         }
+    }
+
+    private func deniedPrefixSuggestion(for command: ResolvedWrappedCommand, matchedPrefix: [String]) -> String {
+        if command.name == "gh", matchedPrefix == ["auth"] {
+            return "Try a non-auth GitHub command such as `gh api /user` instead."
+        }
+
+        if !command.allowPrefixes.isEmpty {
+            return "Try one of the allowed subcommands for `\(command.name)` instead."
+        }
+
+        return "Try a different non-sensitive subcommand for `\(command.name)` instead."
     }
 
     private func resolveWorkingDirectory(_ cwd: String?) throws -> URL? {
