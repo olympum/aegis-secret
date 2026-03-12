@@ -46,15 +46,13 @@ jobs:
           security default-keychain -d user -s build.keychain
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" build.keychain
 
-      - name: Install provisioning profile if provided
-        if: ${{ secrets.DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 != '' }}
+      - name: Write App Store Connect API key
         run: |
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          echo "${{ secrets.DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/aegis-secret.provisionprofile"
-          PROFILE_NAME="$(security cms -D -i "$RUNNER_TEMP/aegis-secret.provisionprofile" | plutil -extract Name raw -)"
-          cp "$RUNNER_TEMP/aegis-secret.provisionprofile" "$HOME/Library/MobileDevice/Provisioning Profiles/"
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$RUNNER_TEMP/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
           {
-            echo "AEGIS_SECRET_RELEASE_PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME"
+            echo "AEGIS_SECRET_ASC_API_KEY_PATH=$RUNNER_TEMP/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
+            echo "AEGIS_SECRET_ASC_API_KEY_ID=${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}"
+            echo "AEGIS_SECRET_ASC_API_ISSUER_ID=${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}"
           } >> "$GITHUB_ENV"
 
       - name: Store notarytool credentials

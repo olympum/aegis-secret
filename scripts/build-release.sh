@@ -7,26 +7,25 @@ source "$SCRIPT_DIR/release-common.sh"
 load_release_env
 
 require_command xcodebuild
-require_command codesign
 
 TAG="$(resolve_release_tag "${1:-}")"
 VERSION="$(release_version_from_tag "$TAG")"
 DIST_DIR="$(release_dist_dir "$TAG")"
 BUILD_DIR="$ROOT_DIR/.build/xcode-release/$TAG"
 ARCHIVE_PATH="$DIST_DIR/Aegis Secret.xcarchive"
+EXPORT_DIR="$DIST_DIR/export"
 APP_PATH="$DIST_DIR/Aegis Secret.app"
-BUILD_LOG="$DIST_DIR/xcodebuild-release.log"
+ARCHIVE_LOG="$DIST_DIR/xcodebuild-archive.log"
+EXPORT_LOG="$DIST_DIR/xcodebuild-export.log"
+EXPORT_OPTIONS_PLIST="$DIST_DIR/ExportOptions.plist"
 TEAM_ID="${AEGIS_SECRET_TEAM_ID:-}"
-SIGNING_IDENTITY="${AEGIS_SECRET_RELEASE_SIGNING_IDENTITY:-$(detect_developer_id_identity)}"
-PROFILE_SPECIFIER="${AEGIS_SECRET_RELEASE_PROVISIONING_PROFILE_SPECIFIER:-}"
 
 require_value "$TEAM_ID" "AEGIS_SECRET_TEAM_ID"
-require_value "$SIGNING_IDENTITY" "AEGIS_SECRET_RELEASE_SIGNING_IDENTITY or an installed Developer ID Application identity"
 
 mkdir -p "$DIST_DIR" "$BUILD_DIR"
-rm -rf "$ARCHIVE_PATH" "$APP_PATH"
+rm -rf "$ARCHIVE_PATH" "$EXPORT_DIR" "$APP_PATH"
 
-XCODEBUILD_ARGS=(
+ARCHIVE_ARGS=(
   xcodebuild
   -project "$ROOT_DIR/Aegis Secret.xcodeproj"
   -scheme "Aegis Secret"
@@ -34,24 +33,44 @@ XCODEBUILD_ARGS=(
   -destination "platform=macOS"
   -archivePath "$ARCHIVE_PATH"
   -derivedDataPath "$BUILD_DIR"
+  -allowProvisioningUpdates
   DEVELOPMENT_TEAM="$TEAM_ID"
-  CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"
+  archive
 )
+append_xcode_auth_args ARCHIVE_ARGS
 
-if [[ -n "$PROFILE_SPECIFIER" ]]; then
-  XCODEBUILD_ARGS+=(
-    CODE_SIGN_STYLE=Manual
-    PROVISIONING_PROFILE_SPECIFIER="$PROFILE_SPECIFIER"
-  )
-else
-  XCODEBUILD_ARGS+=(-allowProvisioningUpdates)
-fi
+"${ARCHIVE_ARGS[@]}" | tee "$ARCHIVE_LOG"
 
-XCODEBUILD_ARGS+=(archive)
+cat > "$EXPORT_OPTIONS_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>destination</key>
+  <string>export</string>
+  <key>method</key>
+  <string>developer-id</string>
+  <key>signingStyle</key>
+  <string>automatic</string>
+  <key>teamID</key>
+  <string>$TEAM_ID</string>
+</dict>
+</plist>
+EOF
 
-"${XCODEBUILD_ARGS[@]}" | tee "$BUILD_LOG"
+EXPORT_ARGS=(
+  xcodebuild
+  -exportArchive
+  -archivePath "$ARCHIVE_PATH"
+  -exportPath "$EXPORT_DIR"
+  -exportOptionsPlist "$EXPORT_OPTIONS_PLIST"
+  -allowProvisioningUpdates
+)
+append_xcode_auth_args EXPORT_ARGS
 
-cp -R "$ARCHIVE_PATH/Products/Applications/Aegis Secret.app" "$APP_PATH"
+"${EXPORT_ARGS[@]}" | tee "$EXPORT_LOG"
+
+cp -R "$EXPORT_DIR/Aegis Secret.app" "$APP_PATH"
 
 codesign -dv --verbose=4 "$APP_PATH" >/dev/null
 

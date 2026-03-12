@@ -64,6 +64,16 @@ detect_developer_id_identity() {
     | head -n 1
 }
 
+append_xcode_auth_args() {
+  local args_name="$1"
+
+  if [[ -n "${AEGIS_SECRET_ASC_API_KEY_PATH:-}" ]]; then
+    require_value "${AEGIS_SECRET_ASC_API_KEY_ID:-}" "AEGIS_SECRET_ASC_API_KEY_ID"
+    require_value "${AEGIS_SECRET_ASC_API_ISSUER_ID:-}" "AEGIS_SECRET_ASC_API_ISSUER_ID"
+    eval "$args_name+=( \"-authenticationKeyPath\" \"$AEGIS_SECRET_ASC_API_KEY_PATH\" \"-authenticationKeyID\" \"$AEGIS_SECRET_ASC_API_KEY_ID\" \"-authenticationKeyIssuerID\" \"$AEGIS_SECRET_ASC_API_ISSUER_ID\" )"
+  fi
+}
+
 require_value() {
   local value="$1"
   local label="$2"

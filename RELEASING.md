@@ -51,7 +51,6 @@ Suggested local config file:
 ```bash
 mkdir -p ~/.config/aegis-secret
 cat > ~/.config/aegis-secret/release.env <<'EOF'
-AEGIS_SECRET_RELEASE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 AEGIS_SECRET_NOTARY_PROFILE="AegisSecretRelease"
 EOF
 ```
@@ -130,6 +129,8 @@ The release workflow expects these GitHub secrets:
 - `APPLE_TEAM_ID`
 - `DEVELOPER_ID_APPLICATION_P12_BASE64`
 - `DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `APP_STORE_CONNECT_API_KEY_P8`
+- `APP_STORE_CONNECT_API_KEY_ID`
+- `APP_STORE_CONNECT_API_ISSUER_ID`
 - `NOTARY_APPLE_ID`
 - `NOTARY_APP_SPECIFIC_PASSWORD`
-- optionally `DEVELOPER_ID_PROVISIONING_PROFILE_BASE64`
