@@ -2,26 +2,80 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Aegis Secret lets agents use local commands with Touch ID approval on macOS.
+Aegis Secret lets Claude, Codex, and other MCP-capable agents use selected
+local CLIs with Touch ID approval on macOS.
 
-Secrets stay in Keychain and are managed by humans through the CLI. Agents do
-not get raw secret tools over MCP. Instead, MCP exposes a small wrapped-command
-surface, and Aegis runs the real CLI directly after approval.
+The product model is intentionally simple:
+
+- humans manage raw secrets through the CLI
+- agents do not get raw secret tools over MCP
+- MCP exposes only wrapped local commands
+- Aegis runs the real CLI directly after approval
+
+Examples:
+
+- let an agent use `gh api /user`
+- let an agent use `aws sts get-caller-identity --output json`
+- let an agent use `gcloud projects list --format=json`
+
+## What Aegis Does
+
+Aegis has two surfaces:
+
+- CLI for humans
+- MCP for agents
+
+### Human CLI
+
+Humans use the CLI to:
+
+- store, read, list, and delete Keychain secrets
+- inspect wrapped-command config
+- run wrapped commands manually
+- repair user setup
+
+### Agent MCP
+
+Agents get only:
+
+- `list_commands`
+- `run_command`
+
+That means an agent can discover which local tools Aegis allows and then ask
+Aegis to run one of them. It does not get `get_secret`, `set_secret`, or
+`delete_secret` over MCP.
 
 ## Install
 
 ### Binary Release
 
-1. Download `Aegis Secret-<version>-installer.pkg`.
-2. Open the package and complete the installer.
+1. Download `Aegis Secret-<version>-installer.pkg`
+2. Open the package and finish the installer
 
-The installer places `Aegis Secret.app` in `/Applications`, installs
-`aegis-secret` and `aegis-secret-mcp` into `/usr/local/bin`, and makes a
-best-effort attempt to register the user-scoped MCP server for Codex and
-Claude. It also updates the managed Aegis guidance block in
-`~/.codex/AGENTS.md` and `~/.claude/CLAUDE.md`.
+The package installs:
 
-If you need to repair the per-user MCP registration later, run:
+- `/Applications/Aegis Secret.app`
+- `/usr/local/bin/aegis-secret`
+- `/usr/local/bin/aegis-secret-mcp`
+
+The installer also makes a best-effort attempt to run:
+
+```bash
+aegis-secret install-user
+```
+
+That per-user setup step is what creates and refreshes:
+
+- `~/.config/aegis-secret/commands.base.json`
+- `~/.config/aegis-secret/commands.local.json`
+- user-scoped Claude MCP registration
+- user-scoped Codex MCP registration
+- the managed Aegis block in:
+  - `~/.claude/CLAUDE.md`
+  - `~/.codex/AGENTS.md`
+
+If that best-effort step did not run, or if you want to repair user setup
+later, run:
 
 ```bash
 aegis-secret install-user
@@ -29,7 +83,9 @@ aegis-secret install-user
 
 ### Build From Source
 
-Store your Xcode development team ID once:
+Source installs are for development and contributors.
+
+Store your Xcode team ID once:
 
 ```bash
 mkdir -p ~/.config/aegis-secret
@@ -38,8 +94,8 @@ AEGIS_SECRET_TEAM_ID=YOURTEAMID
 EOF
 ```
 
-If you want Xcode.app builds to work without editing the project file, create
-the repo-local override once:
+If you want Xcode.app builds to work without editing the project file, create a
+repo-local signing override once:
 
 ```bash
 cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig
@@ -48,7 +104,7 @@ cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig
 Then set your team ID in `Config/Signing.local.xcconfig`. That file is
 gitignored.
 
-Then run:
+Then install:
 
 ```bash
 git clone https://github.com/olympum/aegis-secret.git
@@ -56,101 +112,96 @@ cd aegis-secret
 ./scripts/install-user-mcp.sh
 ```
 
-## Use
+The source installer builds a signed development app, installs it into
+`~/Applications/Aegis Secret.app`, and then runs `install-user`.
 
-### Store a secret
+## Quick Start
+
+Store a secret:
 
 ```bash
 aegis-secret set OPENAI_API_KEY
 ```
 
-### Check available wrapped commands
+See which wrapped commands ship by default:
 
 ```bash
 aegis-secret command list
 aegis-secret command show gh
 ```
 
-### Run a wrapped command yourself
+Run one yourself:
 
 ```bash
 aegis-secret run gh -- api /user
 aegis-secret run aws -- sts get-caller-identity --output json
 ```
 
-### Let the agent use MCP tools
+Let an agent use the MCP server:
 
-The MCP server exposes:
+1. the agent calls `list_commands`
+2. the agent picks a wrapped command such as `gh`
+3. the agent calls `run_command`
+4. you approve with Touch ID
 
-- `list_commands`
-- `run_command`
+## What Changes On Disk
 
-Typical agent flow:
+Aegis intentionally keeps its editable config visible under
+`~/.config/aegis-secret`.
 
-1. Call `list_commands`
-2. Pick a wrapped command such as `gh`
-3. Call `run_command` with the wrapped command name and argv
-4. Approve the request with Touch ID
+Managed by Aegis:
 
-The wrapped command name is the whitelist. If `kubectl` is not configured, MCP
-cannot run `kubectl`.
+- `commands.base.json`
+- the marked Aegis block inside `~/.claude/CLAUDE.md`
+- the marked Aegis block inside `~/.codex/AGENTS.md`
 
-## Wrapped Commands
+User-owned:
 
-A wrapped command is a named command Aegis is allowed to run for the agent.
+- `commands.local.json`
+- the rest of `~/.claude/CLAUDE.md`
+- the rest of `~/.codex/AGENTS.md`
+- `install.env` if you build from source
 
-Example:
+The model is similar to a distro-managed base config plus a user overlay:
 
-- wrapped command name: `gh`
-- real executable: `gh`
-- allowed by default: arbitrary argv for `gh`
-- built-in deny rules: obvious credential and auth-management paths like
-  `gh auth ...`
+- Aegis replaces `commands.base.json` on install and upgrade
+- you edit `commands.local.json`
+- the effective wrapped-command set is base plus local overlay
 
-This keeps adoption easy:
+## Default Wrapped Commands
 
-- add `gh`, `aws`, or `gcloud`
-- let agents use the real CLI they already know
-- tighten rules later only if you need to
-
-## System Defaults And User Overrides
-
-Aegis uses two visible config files under `~/.config/aegis-secret`:
-
-- managed base file: `commands.base.json`
-- local override file: `commands.local.json`
-
-The model is intentionally simple:
-
-- Aegis replaces `commands.base.json` on install and upgrade.
-- Users edit `commands.local.json`.
-- The effective wrapped-command set is `commands.base.json`, overlaid by
-  `commands.local.json`.
-
-The managed base file includes the shipped defaults for:
+Out of the box, Aegis ships wrappers for:
 
 - `gh`
 - `aws`
 - `gcloud`
 
-The local override file:
+Those defaults live in:
 
-- can override shipped settings for a wrapped command
-- can disable a shipped wrapped command
-- can add new wrapped commands
+- `~/.config/aegis-secret/commands.base.json`
 
-Both the package installer and `aegis-secret install-user` create these files if
-needed. The user file starts empty:
+The shipped defaults are permissive enough to work out of the box, but include
+obvious deny rules for credential and auth-management paths.
 
-```json
-{
-  "version": 1,
-  "commands": []
-}
-```
+Examples:
 
-Start from [`examples/commands.example.json`](examples/commands.example.json)
-for a local override file:
+- `gh auth ...` is blocked
+- `aws sts assume-role ...` is blocked
+- `aws ecr get-login-password` is blocked
+- `gcloud auth ...` is blocked
+
+Wrapped command names are the top-level whitelist. If `kubectl` is not
+configured, Aegis will not run `kubectl` over MCP.
+
+## Customizing Wrapped Commands
+
+Edit:
+
+- `~/.config/aegis-secret/commands.local.json`
+
+Start from [`examples/commands.example.json`](examples/commands.example.json).
+
+Example:
 
 ```json
 {
@@ -176,28 +227,42 @@ for a local override file:
 }
 ```
 
-That example does three things:
+That example:
 
 - makes `gh` prompt every time
 - disables the shipped `aws` wrapper
 - adds a new `kubectl` wrapper
 
-## Agent Guidance
+Useful commands:
 
-`aegis-secret install-user` also manages a small Aegis block in:
+```bash
+aegis-secret command list
+aegis-secret command show gh
+aegis-secret command validate
+aegis-secret command validate --file examples/commands.example.json
+```
 
-- `~/.codex/AGENTS.md`
-- `~/.claude/CLAUDE.md`
+## Expected Agent Behavior
 
-That managed block tells Codex and Claude to prefer:
+After `install-user`, Claude and Codex should prefer Aegis for wrapped tools.
 
-1. `list_commands`
-2. `run_command`
+Expected agent flow:
 
-for wrapped tools such as `gh`, `aws`, and `gcloud`.
+1. call `list_commands`
+2. see whether a tool such as `gh`, `aws`, or `gcloud` is wrapped
+3. use `run_command` instead of calling that CLI directly through Bash
+4. fall back to direct shell use only when the command is not wrapped
 
-Your own notes can stay in those files. Aegis only updates the marked managed
-section and leaves the rest alone.
+Expected behavior for denied commands:
+
+- the agent may try something blocked, such as `gh auth status`
+- Aegis rejects it
+- the agent should recover by trying a safe wrapped command instead, such as
+  `gh api /user`
+
+If an existing Claude or Codex session keeps behaving as if Aegis exposes old
+tools or ignores the wrapped-command path, start a fresh session after install
+or upgrade.
 
 ## CLI Reference
 
@@ -217,11 +282,28 @@ aegis-secret run <name> -- <args...>
 ## Security Model
 
 - Secrets are stored in the macOS Data Protection keychain.
-- CLI secret reads are for explicit human use.
-- MCP never exposes `get_secret`, `set_secret`, or `delete_secret`.
-- Wrapped command names are the top-level whitelist.
+- Raw secret reads are CLI-only and intended for explicit human use.
+- MCP never exposes secret-management tools.
 - Wrapped commands are executed directly, never through a shell.
-- Aegis closes stdin, applies timeouts and output caps, and prompts for Touch ID
-  before execution.
+- Aegis closes stdin for wrapped commands.
+- Aegis applies timeout and output-size limits.
+- Aegis prompts for Touch ID before wrapped-command execution.
 - Default approval caching is five minutes per wrapped command, configurable in
   `commands.base.json` or `commands.local.json`.
+
+## Development
+
+Run the main checks with:
+
+```bash
+swift build
+swift test
+```
+
+If you change install or MCP behavior, also smoke test:
+
+```bash
+./scripts/install-user-mcp.sh
+codex mcp list
+claude mcp list
+```
