@@ -16,6 +16,14 @@ PKG_PATH="$DIST_DIR/Aegis Secret-$VERSION-installer.pkg"
 CHECKSUMS_PATH="$DIST_DIR/SHA256SUMS"
 NOTES_FILE="${AEGIS_SECRET_RELEASE_NOTES_FILE:-}"
 REPOSITORY="${AEGIS_SECRET_GITHUB_REPOSITORY:-$DEFAULT_GITHUB_REPOSITORY}"
+TEMP_NOTES_FILE=""
+
+cleanup() {
+  if [[ -n "$TEMP_NOTES_FILE" && -f "$TEMP_NOTES_FILE" ]]; then
+    rm -f "$TEMP_NOTES_FILE"
+  fi
+}
+trap cleanup EXIT
 
 for required_path in "$PKG_PATH" "$CHECKSUMS_PATH"; do
   if [[ ! -f "$required_path" ]]; then
@@ -41,7 +49,35 @@ RELEASE_ARGS=(
 if [[ -n "$NOTES_FILE" ]]; then
   RELEASE_ARGS+=(--notes-file "$NOTES_FILE")
 else
-  RELEASE_ARGS+=(--notes "Binary release for Aegis Secret $VERSION.")
+  TEMP_NOTES_FILE="$(mktemp)"
+  cat > "$TEMP_NOTES_FILE" <<EOF
+Aegis Secret $VERSION is the first public binary release.
+
+What's included:
+- Notarized macOS installer package
+- Signed app bundle with Touch ID-gated secret access
+- Local MCP broker for policy-based HTTP access without exposing raw secrets to the LLM
+- CLI for storing secrets and managing policies
+
+Install:
+1. Download \`Aegis.Secret-$VERSION-installer.pkg\`
+2. Open the package and complete the installer
+
+The installer places \`Aegis Secret.app\` in \`/Applications\`, installs
+\`aegis-secret\` and \`aegis-secret-mcp\` in \`/usr/local/bin\`, and makes a
+best-effort attempt to register MCP integration for Codex and Claude.
+
+If you need to repair the per-user MCP registration later, run:
+
+\`\`\`bash
+aegis-secret install-user
+\`\`\`
+
+Verify:
+- Compare the installer checksum against \`SHA256SUMS\`
+- macOS should report the installer as notarized by a Developer ID signature
+EOF
+  RELEASE_ARGS+=(--notes-file "$TEMP_NOTES_FILE")
 fi
 
 "${RELEASE_ARGS[@]}"
