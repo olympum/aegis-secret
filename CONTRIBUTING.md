@@ -4,7 +4,8 @@ Thank you for your interest in contributing.
 
 ## Code of Conduct
 
-This project follows the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating, you agree to uphold this code.
+This project follows the Contributor Covenant. By participating, you agree to
+uphold the standards in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## How to Contribute
 
@@ -64,6 +65,8 @@ the installer.
 
 For local Xcode builds, set your team in `Config/Signing.local.xcconfig`.
 That file is gitignored and should never be committed.
+
+For release work, follow [RELEASING.md](RELEASING.md).
 
 ## Code Style
 

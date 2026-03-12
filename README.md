@@ -225,3 +225,7 @@ workflow uses the signed app bundle created by `./scripts/install-user-mcp.sh`.
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+## Security
+
+Please use [SECURITY.md](SECURITY.md) for private security reporting guidance.
