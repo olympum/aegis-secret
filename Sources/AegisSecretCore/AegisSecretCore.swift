@@ -772,6 +772,7 @@ public enum Command: Equatable {
     case get(key: String, agentName: String)
     case delete(key: String)
     case list
+    case installUser
     case policy(PolicyCommand)
     case help
 }
@@ -796,6 +797,11 @@ public struct CommandParser {
                 throw AegisSecretError.usage("`list` does not accept additional arguments.")
             }
             return .list
+        case "install-user":
+            guard arguments.count == 1 else {
+                throw AegisSecretError.usage("`install-user` does not accept additional arguments.")
+            }
+            return .installUser
         case "policy":
             return try parsePolicy(Array(arguments.dropFirst()))
         case "help", "--help", "-h":
@@ -964,6 +970,18 @@ public struct CLIApplication {
             for item in try secretStore.listSecrets() {
                 print(item.key)
             }
+        case .installUser:
+            let installation = try UserInstaller(currentExecutablePath: CommandLine.arguments[0]).install()
+            print("Installed user shims for `\(installation.appBundleURL.path)`.")
+            if installation.registeredCodex {
+                print("Registered the Codex MCP server.")
+            }
+            if installation.registeredClaude {
+                print("Registered the Claude MCP server.")
+            }
+            if !installation.registeredCodex && !installation.registeredClaude {
+                print("No supported MCP client CLI was found, so only PATH shims were created.")
+            }
         case .policy(let policyCommand):
             try handlePolicyCommand(policyCommand)
         case .help:
@@ -1036,6 +1054,7 @@ Usage:
   aegis-secret get <key> --agent <agent-name>
   aegis-secret delete <key>
   aegis-secret list
+  aegis-secret install-user
   aegis-secret policy list
   aegis-secret policy show <name>
   aegis-secret policy validate [<name> | --file <path>]
@@ -1044,8 +1063,201 @@ Usage:
 Notes:
   `set` reads from the terminal by default, or from stdin when piped / passed `--stdin`.
   `get` is for explicit human use and reveals the raw secret on stdout after device-owner authentication.
+  `install-user` creates PATH shims in `~/.local/bin` and registers user-scoped MCP integrations for installed Codex / Claude CLIs.
   Policy JSON defaults to `~/.config/aegis-secret/policies.json` unless `AEGIS_SECRET_POLICIES_FILE` is set.
 """
+
+public struct UserInstallationSummary {
+    public let appBundleURL: URL
+    public let registeredCodex: Bool
+    public let registeredClaude: Bool
+}
+
+public struct UserInstaller {
+    public let currentExecutablePath: String
+    public let environment: [String: String]
+    public let fileManager: FileManager
+
+    public init(
+        currentExecutablePath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) {
+        self.currentExecutablePath = currentExecutablePath
+        self.environment = environment
+        self.fileManager = fileManager
+    }
+
+    public func install() throws -> UserInstallationSummary {
+        let appBundleURL = try resolveAppBundleURL()
+        guard !appBundleURL.path.hasPrefix("/Volumes/") else {
+            throw AegisSecretError.runtime("Run `install-user` after copying Aegis Secret.app to /Applications or ~/Applications.")
+        }
+
+        let executableURL = appBundleURL.appendingPathComponent("Contents/MacOS/aegis-secret")
+        let binDirectory = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin", isDirectory: true)
+        try fileManager.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+
+        try writeShim(
+            named: "aegis-secret",
+            targetExecutable: executableURL,
+            arguments: [],
+            in: binDirectory
+        )
+        try writeShim(
+            named: "aegis-secret-mcp",
+            targetExecutable: executableURL,
+            arguments: ["--mcp-server"],
+            in: binDirectory
+        )
+
+        let serverName = "aegis-secret"
+        let registeredCodex = try registerCodex(serverName: serverName, executableURL: executableURL)
+        let registeredClaude = try registerClaude(serverName: serverName, executableURL: executableURL)
+
+        return UserInstallationSummary(
+            appBundleURL: appBundleURL,
+            registeredCodex: registeredCodex,
+            registeredClaude: registeredClaude
+        )
+    }
+
+    private func resolveAppBundleURL() throws -> URL {
+        let bundleURL = Bundle.main.bundleURL.standardizedFileURL
+        if bundleURL.pathExtension == "app" {
+            return bundleURL
+        }
+
+        let executableURL = URL(fileURLWithPath: currentExecutablePath).resolvingSymlinksInPath()
+        let candidate = executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        if candidate.pathExtension == "app" {
+            return candidate.standardizedFileURL
+        }
+
+        throw AegisSecretError.runtime("`install-user` must be run from the signed Aegis Secret app bundle.")
+    }
+
+    private func writeShim(
+        named shimName: String,
+        targetExecutable: URL,
+        arguments: [String],
+        in directory: URL
+    ) throws {
+        let shimURL = directory.appendingPathComponent(shimName)
+        let renderedArguments = arguments.map { shellQuote($0) }.joined(separator: " ")
+        let argumentSuffix = renderedArguments.isEmpty ? "" : " \(renderedArguments)"
+        let contents = """
+        #!/bin/zsh
+        exec \(shellQuote(targetExecutable.path))\(argumentSuffix) "$@"
+        """
+
+        try contents.write(to: shimURL, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shimURL.path)
+    }
+
+    private func registerCodex(serverName: String, executableURL: URL) throws -> Bool {
+        guard let codexExecutable = findExecutable(named: "codex") else {
+            return false
+        }
+
+        _ = try runProcess(
+            executableURL: codexExecutable,
+            arguments: ["mcp", "remove", serverName],
+            allowFailure: true
+        )
+        _ = try runProcess(
+            executableURL: codexExecutable,
+            arguments: [
+                "mcp", "add", serverName,
+                "--env", "AEGIS_SECRET_AGENT_NAME=Codex",
+                "--",
+                executableURL.path,
+                "--mcp-server"
+            ]
+        )
+        return true
+    }
+
+    private func registerClaude(serverName: String, executableURL: URL) throws -> Bool {
+        guard let claudeExecutable = findExecutable(named: "claude") else {
+            return false
+        }
+
+        _ = try runProcess(
+            executableURL: claudeExecutable,
+            arguments: ["mcp", "remove", serverName],
+            allowFailure: true
+        )
+
+        let payloadData = try JSONSerialization.data(
+            withJSONObject: [
+                "type": "stdio",
+                "command": executableURL.path,
+                "args": ["--mcp-server"],
+                "env": ["AEGIS_SECRET_AGENT_NAME": "Claude"]
+            ],
+            options: []
+        )
+        guard let payload = String(data: payloadData, encoding: .utf8) else {
+            throw AegisSecretError.runtime("Failed to encode the Claude MCP registration payload.")
+        }
+
+        _ = try runProcess(
+            executableURL: claudeExecutable,
+            arguments: ["mcp", "add-json", serverName, payload]
+        )
+        return true
+    }
+
+    private func findExecutable(named executableName: String) -> URL? {
+        guard let path = environment["PATH"] else {
+            return nil
+        }
+
+        for component in path.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(component), isDirectory: true)
+                .appendingPathComponent(executableName)
+            if fileManager.isExecutableFile(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func runProcess(
+        executableURL: URL,
+        arguments: [String],
+        allowFailure: Bool = false
+    ) throws -> String {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(decoding: outputData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if process.terminationStatus != 0 && !allowFailure {
+            let renderedCommand = ([executableURL.path] + arguments).joined(separator: " ")
+            let detail = output.isEmpty ? "exit status \(process.terminationStatus)" : output
+            throw AegisSecretError.runtime("Command failed: \(renderedCommand)\n\(detail)")
+        }
+
+        return output
+    }
+}
 
 public func readPassword() -> String? {
     let stdinFD = FileHandle.standardInput.fileDescriptor
@@ -1079,6 +1291,10 @@ public func prettyJSON<T: Encodable>(_ value: T) throws -> Data {
 
 public func expandUserPath(_ path: String) -> String {
     NSString(string: path).expandingTildeInPath
+}
+
+public func shellQuote(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
 }
 
 private func normalizePathPrefix(_ prefix: String) -> String {

@@ -128,6 +128,13 @@ final class AegisSecretCoreTests: XCTestCase {
         )
     }
 
+    func testInstallUserParses() throws {
+        XCTAssertEqual(
+            try CommandParser().parse(["install-user"], stdinIsTTY: true),
+            .installUser
+        )
+    }
+
     func testPolicyValidateFileParses() throws {
         XCTAssertEqual(
             try CommandParser().parse(["policy", "validate", "--file", "/tmp/policies.json"], stdinIsTTY: true),

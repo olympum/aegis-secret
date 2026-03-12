@@ -13,10 +13,9 @@ source installs.
 
 Recommended v1 release format:
 
-- notarized `Aegis Secret.app` bundled as a `.zip`
+- notarized `Aegis Secret-<version>-macOS.dmg`
 - detached checksum file such as `SHA256SUMS`
-- optional helper install script for copying the app into `~/Applications` and
-  registering the user-scoped MCP server
+- drag-and-drop install with a short in-DMG install note
 
 GitHub Releases is an appropriate place to host these assets. Apple is still
 required for code signing and notarization.
@@ -96,19 +95,25 @@ At release time:
 ./scripts/build-release.sh v0.1.0
 ```
 
-2. Notarize and staple it:
+2. Notarize and staple the app bundle:
 
 ```bash
 ./scripts/notarize-release.sh v0.1.0
 ```
 
-3. Package release assets:
+3. Package the DMG:
 
 ```bash
 ./scripts/package-release-assets.sh v0.1.0
 ```
 
-4. Create a draft GitHub release:
+4. Notarize and staple the DMG:
+
+```bash
+./scripts/notarize-dmg.sh v0.1.0
+```
+
+5. Create a draft GitHub release:
 
 ```bash
 ./scripts/create-github-release.sh v0.1.0
@@ -129,6 +134,7 @@ Before publishing a release:
 - `aegis-secret list` works from the installed app wrapper.
 - A policy-backed request completes with exactly one Touch ID prompt.
 - `spctl --assess --type execute` accepts the stapled app.
+- `spctl --assess --type open` accepts the stapled DMG.
 - The GitHub release notes include install steps and the checksum file.
 
 ## Future Automation
