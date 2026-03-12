@@ -230,7 +230,7 @@ public final class StdioMCPServer {
             ToolDescriptor(
                 name: "list_commands",
                 title: "List wrapped commands",
-                description: "List the wrapped commands that Aegis Secret allows agents to run locally.",
+                description: "List the local CLIs that Aegis Secret wants agents to use instead of calling those commands directly through Bash. Call this first when a task might use wrapped tools such as gh, aws, or gcloud.",
                 inputSchema: [
                     "type": .string("object"),
                     "properties": .object([:]),
@@ -247,7 +247,7 @@ public final class StdioMCPServer {
             ToolDescriptor(
                 name: "run_command",
                 title: "Run wrapped command",
-                description: "Run a configured wrapped command with Touch ID approval. Aegis executes the real CLI directly without a shell.",
+                description: "Run a configured wrapped command with Touch ID approval. Prefer this over invoking wrapped CLIs such as gh, aws, or gcloud directly through Bash when the command appears in list_commands. Aegis executes the real CLI directly without a shell.",
                 inputSchema: [
                     "type": .string("object"),
                     "properties": .object([
