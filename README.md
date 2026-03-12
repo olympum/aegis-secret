@@ -2,20 +2,16 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Aegis Secret solves a simple problem:
-
-you want agents to use local developer tools such as `gh`, `aws`, and
-`gcloud`, but you do not want them freely shelling out to those tools or asking
-for raw credentials.
+Aegis Secret allows agents to use local developer tools such as `gh`, `aws`, and
+`gcloud`, but without them freely shelling out to those tools and asking or using
+raw credentials.
 
 Aegis sits between the agent and the local CLI:
 
 - the agent sees a small MCP surface
-- Aegis prompts you with Touch ID
+- Aegis prompts for Touch ID
 - Aegis runs the real local command directly
 - the agent gets the command result, not a raw secret
-
-This is not just a “secret vault for agents.”
 
 Wrapped commands are the main product surface. They matter because many useful
 tools already know how to authenticate themselves through existing local state:
@@ -23,9 +19,6 @@ tools already know how to authenticate themselves through existing local state:
 - `gh` may already be logged in
 - `aws` may already have SSO, profile, or role-based auth
 - `gcloud` may already have an active local login
-
-In those cases, the problem is not “how do I hand the token to the model.” The
-problem is “how do I let the agent use the local tool safely and predictably.”
 
 The product model is intentionally simple:
 
@@ -70,6 +63,9 @@ Aegis to run one of them. It does not get `get_secret`, `set_secret`, or
 ## Install
 
 ### Binary Release
+
+Download the installer package from the
+[GitHub Releases page](https://github.com/olympum/aegis-secret/releases).
 
 1. Download `Aegis Secret-<version>-installer.pkg`
 2. Open the package and finish the installer
