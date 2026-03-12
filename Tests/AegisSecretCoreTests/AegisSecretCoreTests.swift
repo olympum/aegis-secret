@@ -75,9 +75,9 @@ final class AegisSecretCoreTests: XCTestCase {
         }
     }
 
-    func testDeleteParsesAlias() throws {
+    func testDeleteParses() throws {
         XCTAssertEqual(
-            try CommandParser().parse(["rm", "OPENAI_API_KEY"], stdinIsTTY: true),
+            try CommandParser().parse(["delete", "OPENAI_API_KEY"], stdinIsTTY: true),
             .delete(key: "OPENAI_API_KEY")
         )
     }
@@ -89,15 +89,8 @@ final class AegisSecretCoreTests: XCTestCase {
         )
     }
 
-    func testCapabilityAliasStillParses() throws {
-        XCTAssertEqual(
-            try CommandParser().parse(["capability", "validate", "--file", "/tmp/capabilities.json"], stdinIsTTY: true),
-            .policy(.validateFile(path: "/tmp/capabilities.json"))
-        )
-    }
-
-    func testCapabilityConfigResolvesDefaults() throws {
-        let capability = try CapabilityConfig(
+    func testPolicyConfigResolvesDefaults() throws {
+        let policy = try PolicyConfig(
             name: "openai-api",
             secretKey: "OPENAI_API_KEY",
             baseURL: "https://api.openai.com",
@@ -106,18 +99,18 @@ final class AegisSecretCoreTests: XCTestCase {
             allowedPathPrefixes: ["/v1"]
         ).resolved()
 
-        XCTAssertEqual(capability.allowedHosts, ["api.openai.com"])
-        XCTAssertEqual(capability.allowedMethods, ["GET", "POST"])
-        XCTAssertEqual(capability.authHeaderName, "Authorization")
-        XCTAssertEqual(capability.authHeaderPrefix, "Bearer ")
+        XCTAssertEqual(policy.allowedHosts, ["api.openai.com"])
+        XCTAssertEqual(policy.allowedMethods, ["GET", "POST"])
+        XCTAssertEqual(policy.authHeaderName, "Authorization")
+        XCTAssertEqual(policy.authHeaderPrefix, "Bearer ")
     }
 
     func testBrokerRejectsDisallowedHost() async throws {
         let tempDirectory = try temporaryDirectory()
-        let capabilityFile = tempDirectory.appendingPathComponent("capabilities.json")
+        let policyFile = tempDirectory.appendingPathComponent("policies.json")
         try prettyJSON(
-            CapabilityFile(capabilities: [
-                CapabilityConfig(
+            PolicyFile(policies: [
+                PolicyConfig(
                     name: "openai-api",
                     secretKey: "OPENAI_API_KEY",
                     baseURL: "https://api.openai.com",
@@ -126,10 +119,10 @@ final class AegisSecretCoreTests: XCTestCase {
                     allowedPathPrefixes: ["/v1"]
                 )
             ])
-        ).write(to: capabilityFile)
+        ).write(to: policyFile)
 
-        let broker = HTTPCapabilityBroker(
-            capabilityStore: CapabilityStore(fileURL: capabilityFile),
+        let broker = HTTPPolicyBroker(
+            policyStore: PolicyStore(fileURL: policyFile),
             secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
             authenticator: NoopAuthenticator(),
             session: MockHTTPSession { _ in
@@ -140,7 +133,7 @@ final class AegisSecretCoreTests: XCTestCase {
 
         do {
             _ = try await broker.request(
-                capability: "openai-api",
+                policy: "openai-api",
                 request: BrokerRequest(method: "GET", url: "https://evil.example.com/v1/models"),
                 requester: "Test"
             )
@@ -152,10 +145,10 @@ final class AegisSecretCoreTests: XCTestCase {
 
     func testBrokerInjectsAuthorizationHeader() async throws {
         let tempDirectory = try temporaryDirectory()
-        let capabilityFile = tempDirectory.appendingPathComponent("capabilities.json")
+        let policyFile = tempDirectory.appendingPathComponent("policies.json")
         try prettyJSON(
-            CapabilityFile(capabilities: [
-                CapabilityConfig(
+            PolicyFile(policies: [
+                PolicyConfig(
                     name: "openai-api",
                     description: "OpenAI API access",
                     secretKey: "OPENAI_API_KEY",
@@ -166,7 +159,7 @@ final class AegisSecretCoreTests: XCTestCase {
                     defaultHeaders: ["Accept": "application/json"]
                 )
             ])
-        ).write(to: capabilityFile)
+        ).write(to: policyFile)
 
         let session = MockHTTPSession { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
@@ -183,15 +176,15 @@ final class AegisSecretCoreTests: XCTestCase {
             return (Data(#"{"ok":true}"#.utf8), response)
         }
 
-        let broker = HTTPCapabilityBroker(
-            capabilityStore: CapabilityStore(fileURL: capabilityFile),
+        let broker = HTTPPolicyBroker(
+            policyStore: PolicyStore(fileURL: policyFile),
             secretStore: InMemorySecretStore(secrets: ["OPENAI_API_KEY": Data("secret".utf8)]),
             authenticator: NoopAuthenticator(),
             session: session
         )
 
         let response = try await broker.request(
-            capability: "openai-api",
+            policy: "openai-api",
             request: BrokerRequest(
                 method: "POST",
                 path: "/v1/responses",

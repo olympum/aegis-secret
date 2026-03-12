@@ -4,7 +4,6 @@ import Security
 
 public let aegisSecretServiceName = "Aegis Secrets"
 public let policiesFileEnvironmentKey = "AEGIS_SECRET_POLICIES_FILE"
-public let capabilitiesFileEnvironmentKey = "AEGIS_SECRET_CAPABILITIES_FILE"
 
 public enum ExitCode: Int32 {
     case success = 0
@@ -186,7 +185,7 @@ public enum AuthMode: String, Codable, Sendable {
     case header
 }
 
-public struct CapabilityConfig: Codable, Equatable, Sendable {
+public struct PolicyConfig: Codable, Equatable, Sendable {
     public let name: String
     public let description: String?
     public let secretKey: String
@@ -239,7 +238,7 @@ public struct CapabilityConfig: Codable, Equatable, Sendable {
         case defaultHeaders = "default_headers"
     }
 
-    public func resolved() throws -> ResolvedCapability {
+    public func resolved() throws -> ResolvedPolicy {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw AegisSecretError.runtime("Policy names cannot be empty.")
@@ -292,7 +291,7 @@ public struct CapabilityConfig: Codable, Equatable, Sendable {
             (key, value)
         })
 
-        return ResolvedCapability(
+        return ResolvedPolicy(
             name: trimmedName,
             description: description,
             secretKey: trimmedSecretKey,
@@ -308,38 +307,15 @@ public struct CapabilityConfig: Codable, Equatable, Sendable {
     }
 }
 
-public struct CapabilityFile: Codable, Equatable, Sendable {
-    public let capabilities: [CapabilityConfig]
+public struct PolicyFile: Codable, Equatable, Sendable {
+    public let policies: [PolicyConfig]
 
-    public init(capabilities: [CapabilityConfig]) {
-        self.capabilities = capabilities
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case policies
-        case capabilities
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let policies = try container.decodeIfPresent([CapabilityConfig].self, forKey: .policies) {
-            self.capabilities = policies
-            return
-        }
-        if let capabilities = try container.decodeIfPresent([CapabilityConfig].self, forKey: .capabilities) {
-            self.capabilities = capabilities
-            return
-        }
-        self.capabilities = []
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(capabilities, forKey: .policies)
+    public init(policies: [PolicyConfig]) {
+        self.policies = policies
     }
 }
 
-public struct CapabilitySummary: Codable, Equatable, Sendable {
+public struct PolicySummary: Codable, Equatable, Sendable {
     public let name: String
     public let description: String?
     public let baseURL: String
@@ -355,7 +331,7 @@ public struct CapabilitySummary: Codable, Equatable, Sendable {
     }
 }
 
-public struct ResolvedCapability: Equatable, Sendable {
+public struct ResolvedPolicy: Equatable, Sendable {
     public let name: String
     public let description: String?
     public let secretKey: String
@@ -369,7 +345,7 @@ public struct ResolvedCapability: Equatable, Sendable {
     public let defaultHeaders: [String: String]
 }
 
-public struct CapabilityProbeResult: Codable, Equatable, Sendable {
+public struct PolicyProbeResult: Codable, Equatable, Sendable {
     public let ok: Bool
     public let description: String
 
@@ -379,18 +355,15 @@ public struct CapabilityProbeResult: Codable, Equatable, Sendable {
     }
 }
 
-public final class CapabilityStore: @unchecked Sendable {
+public final class PolicyStore: @unchecked Sendable {
     public let fileURL: URL
 
-    public init(fileURL: URL = CapabilityStore.defaultURL()) {
+    public init(fileURL: URL = PolicyStore.defaultURL()) {
         self.fileURL = fileURL
     }
 
     public static func defaultURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let override = environment[policiesFileEnvironmentKey]?.trimmedNonEmpty {
-            return URL(fileURLWithPath: expandUserPath(override))
-        }
-        if let override = environment[capabilitiesFileEnvironmentKey]?.trimmedNonEmpty {
             return URL(fileURLWithPath: expandUserPath(override))
         }
 
@@ -401,21 +374,21 @@ public final class CapabilityStore: @unchecked Sendable {
             .appendingPathComponent("policies.json", isDirectory: false)
     }
 
-    public func rawFile(optionalIfMissing: Bool = true) throws -> CapabilityFile {
+    public func rawFile(optionalIfMissing: Bool = true) throws -> PolicyFile {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             if optionalIfMissing {
-                return CapabilityFile(capabilities: [])
+                return PolicyFile(policies: [])
             }
             throw AegisSecretError.runtime("Policies file not found at `\(fileURL.path)`.")
         }
 
         let data = try Data(contentsOf: fileURL)
-        return try JSONDecoder().decode(CapabilityFile.self, from: data)
+        return try JSONDecoder().decode(PolicyFile.self, from: data)
     }
 
-    public func resolvedCapabilities(optionalIfMissing: Bool = true) throws -> [ResolvedCapability] {
+    public func resolvedPolicies(optionalIfMissing: Bool = true) throws -> [ResolvedPolicy] {
         let file = try rawFile(optionalIfMissing: optionalIfMissing)
-        let resolved = try file.capabilities.map { try $0.resolved() }
+        let resolved = try file.policies.map { try $0.resolved() }
 
         let names = resolved.map(\.name)
         if Set(names).count != names.count {
@@ -425,9 +398,9 @@ public final class CapabilityStore: @unchecked Sendable {
         return resolved.sorted { $0.name < $1.name }
     }
 
-    public func summaries() throws -> [CapabilitySummary] {
-        try resolvedCapabilities().map {
-            CapabilitySummary(
+    public func listPolicies() throws -> [PolicySummary] {
+        try resolvedPolicies().map {
+            PolicySummary(
                 name: $0.name,
                 description: $0.description,
                 baseURL: $0.baseURL.absoluteString,
@@ -437,59 +410,47 @@ public final class CapabilityStore: @unchecked Sendable {
         }
     }
 
-    public func rawPolicy(named name: String) throws -> CapabilityConfig {
+    public func rawPolicy(named name: String) throws -> PolicyConfig {
         let file = try rawFile(optionalIfMissing: false)
-        guard let capability = file.capabilities.first(where: { $0.name == name }) else {
+        guard let policy = file.policies.first(where: { $0.name == name }) else {
             throw AegisSecretError.runtime("Policy `\(name)` was not found.")
         }
-        return capability
+        return policy
     }
 
-    public func rawCapability(named name: String) throws -> CapabilityConfig {
-        try rawPolicy(named: name)
-    }
-
-    public func resolvedPolicy(named name: String) throws -> ResolvedCapability {
-        guard let capability = try resolvedCapabilities(optionalIfMissing: false).first(where: { $0.name == name }) else {
+    public func resolvedPolicy(named name: String) throws -> ResolvedPolicy {
+        guard let policy = try resolvedPolicies(optionalIfMissing: false).first(where: { $0.name == name }) else {
             throw AegisSecretError.runtime("Policy `\(name)` was not found.")
         }
-        return capability
-    }
-
-    public func resolvedCapability(named name: String) throws -> ResolvedCapability {
-        try resolvedPolicy(named: name)
+        return policy
     }
 
     @discardableResult
     public func importFile(from sourcePath: String) throws -> Int {
         let sourceURL = URL(fileURLWithPath: expandUserPath(sourcePath))
         let data = try Data(contentsOf: sourceURL)
-        let file = try JSONDecoder().decode(CapabilityFile.self, from: data)
-        _ = try file.capabilities.map { try $0.resolved() }
+        let file = try JSONDecoder().decode(PolicyFile.self, from: data)
+        _ = try file.policies.map { try $0.resolved() }
 
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
-        return file.capabilities.count
+        return file.policies.count
     }
 
     public func validateCurrentConfiguration() throws -> Int {
-        try resolvedCapabilities(optionalIfMissing: false).count
+        try resolvedPolicies(optionalIfMissing: false).count
     }
 
     public func validateCurrentPolicy(named name: String) throws {
         _ = try resolvedPolicy(named: name)
     }
 
-    public func validateCurrentCapability(named name: String) throws {
-        try validateCurrentPolicy(named: name)
-    }
-
     public func validateFile(at path: String) throws -> Int {
         let url = URL(fileURLWithPath: expandUserPath(path))
         let data = try Data(contentsOf: url)
-        let file = try JSONDecoder().decode(CapabilityFile.self, from: data)
-        _ = try file.capabilities.map { try $0.resolved() }
-        return file.capabilities.count
+        let file = try JSONDecoder().decode(PolicyFile.self, from: data)
+        _ = try file.policies.map { try $0.resolved() }
+        return file.policies.count
     }
 }
 
@@ -542,75 +503,75 @@ public protocol HTTPSession: Sendable {
 
 extension URLSession: HTTPSession {}
 
-public struct HTTPCapabilityBroker: Sendable {
-    public let capabilityStore: CapabilityStore
+public struct HTTPPolicyBroker: Sendable {
+    public let policyStore: PolicyStore
     public let secretStore: SecretStore
     public let authenticator: DeviceAuthenticator
     public let session: HTTPSession
     public let maxResponseBytes: Int
 
     public init(
-        capabilityStore: CapabilityStore,
+        policyStore: PolicyStore,
         secretStore: SecretStore,
         authenticator: DeviceAuthenticator,
         session: HTTPSession = URLSession.shared,
         maxResponseBytes: Int = 256 * 1024
     ) {
-        self.capabilityStore = capabilityStore
+        self.policyStore = policyStore
         self.secretStore = secretStore
         self.authenticator = authenticator
         self.session = session
         self.maxResponseBytes = maxResponseBytes
     }
 
-    public func probe(capability name: String) throws -> CapabilityProbeResult {
-        let capability = try capabilityStore.resolvedPolicy(named: name)
-        if try secretStore.secretExists(for: capability.secretKey) {
-            return CapabilityProbeResult(ok: true, description: capability.description ?? "Policy is ready.")
+    public func probe(policy name: String) throws -> PolicyProbeResult {
+        let policy = try policyStore.resolvedPolicy(named: name)
+        if try secretStore.secretExists(for: policy.secretKey) {
+            return PolicyProbeResult(ok: true, description: policy.description ?? "Policy is ready.")
         }
-        return CapabilityProbeResult(ok: false, description: "The Keychain secret `\(capability.secretKey)` is missing.")
+        return PolicyProbeResult(ok: false, description: "The Keychain secret `\(policy.secretKey)` is missing.")
     }
 
-    public func request(capability name: String, request: BrokerRequest, requester: String? = nil) async throws -> BrokerResponse {
-        let capability = try capabilityStore.resolvedPolicy(named: name)
+    public func request(policy name: String, request: BrokerRequest, requester: String? = nil) async throws -> BrokerResponse {
+        let policy = try policyStore.resolvedPolicy(named: name)
 
-        guard try secretStore.secretExists(for: capability.secretKey) else {
-            throw AegisSecretError.runtime("Policy `\(capability.name)` is configured, but the Keychain secret `\(capability.secretKey)` is missing.")
+        guard try secretStore.secretExists(for: policy.secretKey) else {
+            throw AegisSecretError.runtime("Policy `\(policy.name)` is configured, but the Keychain secret `\(policy.secretKey)` is missing.")
         }
 
         let method = request.method.uppercased()
-        guard capability.allowedMethods.contains(method) else {
-            throw AegisSecretError.runtime("Method `\(method)` is not allowed for policy `\(capability.name)`.")
+        guard policy.allowedMethods.contains(method) else {
+            throw AegisSecretError.runtime("Method `\(method)` is not allowed for policy `\(policy.name)`.")
         }
 
-        let requestURL = try resolvedURL(for: capability, request: request)
-        guard let host = requestURL.host?.lowercased(), capability.allowedHosts.contains(host) else {
-            throw AegisSecretError.runtime("Host `\(requestURL.host ?? requestURL.absoluteString)` is not allowed for policy `\(capability.name)`.")
+        let requestURL = try resolvedURL(for: policy, request: request)
+        guard let host = requestURL.host?.lowercased(), policy.allowedHosts.contains(host) else {
+            throw AegisSecretError.runtime("Host `\(requestURL.host ?? requestURL.absoluteString)` is not allowed for policy `\(policy.name)`.")
         }
 
-        guard capability.allowedPathPrefixes.contains(where: { matches(path: requestURL.path, allowedPrefix: $0) }) else {
-            throw AegisSecretError.runtime("Path `\(requestURL.path)` is not allowed for policy `\(capability.name)`.")
+        guard policy.allowedPathPrefixes.contains(where: { matches(path: requestURL.path, allowedPrefix: $0) }) else {
+            throw AegisSecretError.runtime("Path `\(requestURL.path)` is not allowed for policy `\(policy.name)`.")
         }
 
-        let protectedHeaderNames = protectedHeaders(for: capability)
+        let protectedHeaderNames = protectedHeaders(for: policy)
         let userHeaders = try validatedUserHeaders(request.headers, protectedHeaderNames: protectedHeaderNames)
-        let secret = try secretStore.readSecret(for: capability.secretKey)
+        let secret = try secretStore.readSecret(for: policy.secretKey)
         guard let secretString = String(data: secret, encoding: .utf8) else {
-            throw AegisSecretError.runtime("Secret `\(capability.secretKey)` is not valid UTF-8 and cannot be used for HTTP authentication.")
+            throw AegisSecretError.runtime("Secret `\(policy.secretKey)` is not valid UTF-8 and cannot be used for HTTP authentication.")
         }
 
-        let reason = "Allow \(requester ?? "the local policy broker") to use policy '\(capability.name)' for \(method) \(requestURL.path)."
+        let reason = "Allow \(requester ?? "the local policy broker") to use policy '\(policy.name)' for \(method) \(requestURL.path)."
         try await authenticator.authenticate(reason: reason)
 
         var urlRequest = URLRequest(url: requestURL)
         urlRequest.httpMethod = method
-        for (key, value) in capability.defaultHeaders {
+        for (key, value) in policy.defaultHeaders {
             urlRequest.setValue(value, forHTTPHeaderField: key)
         }
         for (key, value) in userHeaders {
             urlRequest.setValue(value, forHTTPHeaderField: key)
         }
-        urlRequest.setValue("\(capability.authHeaderPrefix)\(secretString)", forHTTPHeaderField: capability.authHeaderName)
+        urlRequest.setValue("\(policy.authHeaderPrefix)\(secretString)", forHTTPHeaderField: policy.authHeaderName)
 
         if let bodyData = request.bodyData {
             urlRequest.httpBody = bodyData
@@ -627,7 +588,7 @@ public struct HTTPCapabilityBroker: Sendable {
         return brokerResponse(from: httpResponse, data: data, protectedHeaderNames: protectedHeaderNames)
     }
 
-    private func resolvedURL(for capability: ResolvedCapability, request: BrokerRequest) throws -> URL {
+    private func resolvedURL(for policy: ResolvedPolicy, request: BrokerRequest) throws -> URL {
         if let rawURL = request.url?.trimmedNonEmpty {
             guard let url = URL(string: rawURL) else {
                 throw AegisSecretError.runtime("The supplied URL is invalid.")
@@ -635,8 +596,8 @@ public struct HTTPCapabilityBroker: Sendable {
             return url
         }
 
-        let path = request.path?.trimmedNonEmpty ?? capability.baseURL.path
-        guard let url = URL(string: path, relativeTo: capability.baseURL)?.absoluteURL else {
+        let path = request.path?.trimmedNonEmpty ?? policy.baseURL.path
+        guard let url = URL(string: path, relativeTo: policy.baseURL)?.absoluteURL else {
             throw AegisSecretError.runtime("The supplied path is invalid.")
         }
         return url
@@ -689,14 +650,14 @@ public struct HTTPCapabilityBroker: Sendable {
         )
     }
 
-    private func protectedHeaders(for capability: ResolvedCapability) -> Set<String> {
+    private func protectedHeaders(for policy: ResolvedPolicy) -> Set<String> {
         var headers: Set<String> = [
             "authorization",
             "proxy-authorization",
             "cookie",
             "x-api-key"
         ]
-        headers.insert(capability.authHeaderName.lowercased())
+        headers.insert(policy.authHeaderName.lowercased())
         return headers
     }
 }
@@ -736,15 +697,15 @@ public struct CommandParser {
             return try parseSet(Array(arguments.dropFirst()), stdinIsTTY: stdinIsTTY)
         case "get":
             return try parseGet(Array(arguments.dropFirst()))
-        case "delete", "rm":
+        case "delete":
             return try parseDelete(Array(arguments.dropFirst()))
-        case "list", "ls":
+        case "list":
             guard arguments.count == 1 else {
                 throw AegisSecretError.usage("`list` does not accept additional arguments.")
             }
             return .list
-        case "policy", "capability":
-            return try parsePolicy(Array(arguments.dropFirst()), commandName: command)
+        case "policy":
+            return try parsePolicy(Array(arguments.dropFirst()))
         case "help", "--help", "-h":
             return .help
         default:
@@ -808,21 +769,21 @@ public struct CommandParser {
         return .delete(key: key)
     }
 
-    private func parsePolicy(_ arguments: [String], commandName: String) throws -> Command {
+    private func parsePolicy(_ arguments: [String]) throws -> Command {
         guard let subcommand = arguments.first else {
-            throw AegisSecretError.usage("`\(commandName)` requires a subcommand.")
+            throw AegisSecretError.usage("`policy` requires a subcommand.")
         }
 
         let remaining = Array(arguments.dropFirst())
         switch subcommand {
         case "list":
             guard remaining.isEmpty else {
-                throw AegisSecretError.usage("`\(commandName) list` does not accept additional arguments.")
+                throw AegisSecretError.usage("`policy list` does not accept additional arguments.")
             }
             return .policy(.list)
         case "show":
             guard remaining.count == 1 else {
-                throw AegisSecretError.usage("`\(commandName) show` requires a policy name.")
+                throw AegisSecretError.usage("`policy show` requires a policy name.")
             }
             return .policy(.show(name: remaining[0]))
         case "validate":
@@ -838,7 +799,7 @@ public struct CommandParser {
             throw AegisSecretError.usage("Usage: `aegis-secret policy validate [<name> | --file <path>]`.")
         case "import":
             guard remaining.count == 1 else {
-                throw AegisSecretError.usage("`\(commandName) import` requires a JSON file path.")
+                throw AegisSecretError.usage("`policy import` requires a JSON file path.")
             }
             return .policy(.importFile(path: remaining[0]))
         default:
@@ -851,18 +812,18 @@ public struct CLIApplication {
     public let parser: CommandParser
     public let secretStore: SecretStore
     public let authenticator: DeviceAuthenticator
-    public let capabilityStore: CapabilityStore
+    public let policyStore: PolicyStore
 
     public init(
         parser: CommandParser = CommandParser(),
         secretStore: SecretStore = KeychainSecretStore(),
         authenticator: DeviceAuthenticator = LocalDeviceAuthenticator(),
-        capabilityStore: CapabilityStore = CapabilityStore()
+        policyStore: PolicyStore = PolicyStore()
     ) {
         self.parser = parser
         self.secretStore = secretStore
         self.authenticator = authenticator
-        self.capabilityStore = capabilityStore
+        self.policyStore = policyStore
     }
 
     public func run(arguments: [String], stdinIsTTY: Bool) async -> Never {
@@ -922,26 +883,26 @@ public struct CLIApplication {
     private func handlePolicyCommand(_ command: PolicyCommand) throws {
         switch command {
         case .list:
-            for summary in try capabilityStore.summaries() {
+            for summary in try policyStore.listPolicies() {
                 print(summary.name)
             }
         case .show(let name):
-            let data = try prettyJSON(capabilityStore.rawPolicy(named: name))
+            let data = try prettyJSON(policyStore.rawPolicy(named: name))
             print(String(decoding: data, as: UTF8.self))
         case .validateCurrent(let name):
             if let name {
-                try capabilityStore.validateCurrentPolicy(named: name)
+                try policyStore.validateCurrentPolicy(named: name)
                 print("Policy `\(name)` is valid.")
             } else {
-                let count = try capabilityStore.validateCurrentConfiguration()
-                print("Validated \(count) policies from `\(capabilityStore.fileURL.path)`.")
+                let count = try policyStore.validateCurrentConfiguration()
+                print("Validated \(count) policies from `\(policyStore.fileURL.path)`.")
             }
         case .validateFile(let path):
-            let count = try capabilityStore.validateFile(at: path)
+            let count = try policyStore.validateFile(at: path)
             print("Validated \(count) policies from `\(expandUserPath(path))`.")
         case .importFile(let path):
-            let count = try capabilityStore.importFile(from: path)
-            print("Imported \(count) policies into `\(capabilityStore.fileURL.path)`.")
+            let count = try policyStore.importFile(from: path)
+            print("Imported \(count) policies into `\(policyStore.fileURL.path)`.")
         }
     }
 

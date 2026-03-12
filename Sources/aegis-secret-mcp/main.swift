@@ -9,11 +9,11 @@ private struct ToolErrorPayload: Codable {
 @main
 struct AegisSecretMCPEntryPoint {
     static func main() async {
-        let capabilityStore = CapabilityStore()
+        let policyStore = PolicyStore()
         let secretStore = KeychainSecretStore()
         let authenticator = LocalDeviceAuthenticator()
-        let broker = HTTPCapabilityBroker(
-            capabilityStore: capabilityStore,
+        let broker = HTTPPolicyBroker(
+            policyStore: policyStore,
             secretStore: secretStore,
             authenticator: authenticator
         )
@@ -119,49 +119,25 @@ struct AegisSecretMCPEntryPoint {
                         ])
                     ])
                 )
-                ,
-                Tool(
-                    name: "list_capabilities",
-                    title: "List capabilities (legacy alias)",
-                    description: "Legacy alias for list_policies.",
-                    inputSchema: .object([
-                        "type": .string("object"),
-                        "properties": .object([:])
-                    ])
-                ),
-                Tool(
-                    name: "probe_capability",
-                    title: "Probe capability (legacy alias)",
-                    description: "Legacy alias for probe_policy.",
-                    inputSchema: .object([
-                        "type": .string("object"),
-                        "properties": .object([
-                            "capability": .object([
-                                "type": .string("string")
-                            ])
-                        ]),
-                        "required": .array([.string("capability")])
-                    ])
-                )
             ])
         }
 
         await server.withMethodHandler(CallTool.self) { params in
             do {
                 switch params.name {
-                case "list_policies", "list_capabilities":
-                    return try successResult(["policies": capabilityStore.summaries()])
-                case "probe_policy", "probe_capability":
-                    guard let policy = params.arguments?["policy"]?.stringValue ?? params.arguments?["capability"]?.stringValue else {
+                case "list_policies":
+                    return try successResult(["policies": policyStore.listPolicies()])
+                case "probe_policy":
+                    guard let policy = params.arguments?["policy"]?.stringValue else {
                         return errorResult("Missing `policy`.")
                     }
-                    return try successResult(broker.probe(capability: policy))
+                    return try successResult(broker.probe(policy: policy))
                 case "http_request":
                     guard let arguments = params.arguments else {
                         return errorResult("Missing tool arguments.")
                     }
 
-                    guard let policy = arguments["policy"]?.stringValue ?? arguments["capability"]?.stringValue else {
+                    guard let policy = arguments["policy"]?.stringValue else {
                         return errorResult("Missing `policy`.")
                     }
                     guard let method = arguments["method"]?.stringValue else {
@@ -172,7 +148,7 @@ struct AegisSecretMCPEntryPoint {
                     let body = try decodeBody(arguments["body"])
                     let requester = arguments["requester"]?.stringValue ?? ProcessInfo.processInfo.environment["AEGIS_SECRET_AGENT_NAME"] ?? "MCP client"
                     let response = try await broker.request(
-                        capability: policy,
+                        policy: policy,
                         request: BrokerRequest(
                             method: method,
                             path: arguments["path"]?.stringValue,
