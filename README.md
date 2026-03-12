@@ -2,15 +2,90 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Capability-brokered local secrets for agent workflows on macOS.
+Named-policy secret broker for agent workflows on macOS.
 
-Keep secrets in Keychain, expose only named capabilities to agents, and avoid
+Keep secrets in Keychain, expose named policies to agents, and avoid
 `.env` files as the default workflow.
+
+## What Is A Policy?
+
+A secret is the raw credential, like `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+
+A named policy is the agent-facing name for "this secret may be used in this specific way."
+
+Think of it like this:
+
+Without a policy:
+
+- the agent needs the raw `OPENAI_API_KEY`
+- the agent or subprocess decides where to send it
+- the secret can leak into logs, prompts, shell history, or output
+
+With a named policy:
+
+- secret in Keychain: `OPENAI_API_KEY`
+- policy name: `openai-api`
+- allowed host: `https://api.openai.com`
+- allowed methods: `GET`, `POST`
+- allowed paths: `/v1/...`
+- auth behavior: inject `Authorization: Bearer ...` locally
+
+So when the agent wants to call OpenAI, it asks for policy `openai-api`, not for the raw key.
+
+Concrete example:
+
+- You store the secret once as `OPENAI_API_KEY`.
+- You define a named policy called `openai-api`.
+- The broker knows that policy `openai-api` means:
+  - use `OPENAI_API_KEY`
+  - only talk to `api.openai.com`
+  - only hit `/v1/...`
+  - attach the bearer token itself
+- The agent calls `http_request` with policy `openai-api`.
+- The raw `OPENAI_API_KEY` never needs to be returned to the agent.
+
+That is why this repo talks about named policies, not just secrets.
+
+## How The Agent Uses It
+
+Once a named policy exists, the agent uses that name through MCP.
+
+Example:
+
+1. You store the secret:
+   `OPENAI_API_KEY`
+2. You define the named policy:
+   `openai-api`
+3. The agent sees that `openai-api` is available via `list_policies`.
+4. The agent makes a request like:
+   - tool: `http_request`
+   - policy: `openai-api`
+   - method: `POST`
+   - path: `/v1/responses`
+   - body: `{...}`
+5. The local broker then:
+   - reads `OPENAI_API_KEY` from Keychain
+   - prompts for Touch ID/password
+   - injects the auth header locally
+   - sends the request to OpenAI
+   - returns the API response
+
+So the agent workflow is:
+
+- discover policy names
+- pick one by name
+- call `http_request` with that name
+
+Not:
+
+- ask for the raw key
+- put the key in an env var
+- print the key into the transcript
 
 ## Install
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/olympum/aegis-secret.git
 cd aegis-secret
 ./scripts/install-user-mcp.sh
 ```
@@ -30,36 +105,44 @@ and registers a user-scoped MCP server for Codex and Claude when those CLIs are 
 aegis-secret set OPENAI_API_KEY
 ```
 
-### 2. Import a capability config
+### 2. Import a policy config
 
 ```bash
-aegis-secret capability import ./examples/capabilities.example.json
+aegis-secret policy import ./examples/policies.example.json
 ```
+
+This is where you define named policies: the name the agent can use, which secret backs it, and the rules for where that secret is allowed to go.
 
 ### 3. Check what is available
 
 ```bash
-aegis-secret capability list
-aegis-secret capability show openai-api
+aegis-secret policy list
+aegis-secret policy show openai-api
 ```
 
 ### 4. Let the agent use MCP tools
 
 The MCP server exposes:
 
-- `list_capabilities`
-- `probe_capability`
+- `list_policies`
+- `probe_policy`
 - `http_request`
 
-The preferred path is that the agent uses a capability and never sees the raw secret text.
+The preferred path is that the agent uses a named policy and never sees the raw secret text.
 
-## Example Capability File
+Typical agent flow:
 
-Start from [`examples/capabilities.example.json`](examples/capabilities.example.json):
+1. Call `list_policies`
+2. Call `probe_policy` for `openai-api`
+3. Call `http_request` with policy `openai-api`
+
+## Example Policy File
+
+Start from [`examples/policies.example.json`](examples/policies.example.json):
 
 ```json
 {
-  "capabilities": [
+  "policies": [
     {
       "name": "openai-api",
       "description": "OpenAI API requests through the local broker",
@@ -76,7 +159,7 @@ Start from [`examples/capabilities.example.json`](examples/capabilities.example.
 }
 ```
 
-Imported capability files are stored at `~/.config/aegis-secret/capabilities.json` by default.
+Imported policy files are stored at `~/.config/aegis-secret/policies.json` by default.
 
 ## Commands
 
@@ -85,10 +168,10 @@ aegis-secret set <key>
 aegis-secret get <key> --agent <agent-name>
 aegis-secret delete <key>
 aegis-secret list
-aegis-secret capability list
-aegis-secret capability show <name>
-aegis-secret capability validate [<name> | --file <path>]
-aegis-secret capability import <json-file>
+aegis-secret policy list
+aegis-secret policy show <name>
+aegis-secret policy validate [<name> | --file <path>]
+aegis-secret policy import <json-file>
 ```
 
 ## Development

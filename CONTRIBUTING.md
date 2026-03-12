@@ -60,7 +60,7 @@ claude mcp list
 
 ## Code Style
 
-- Keep the default agent path capability-based rather than raw-secret-based.
+- Keep the default agent path policy-based rather than raw-secret-based.
 - Do not add MCP tools that return raw secret values.
 - Keep auth injection and policy enforcement in the local broker, not in prompts.
 - Prefer small, explicit interfaces over generic secret execution surfaces.

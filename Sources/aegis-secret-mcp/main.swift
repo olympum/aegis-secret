@@ -29,9 +29,9 @@ struct AegisSecretMCPEntryPoint {
         await server.withMethodHandler(ListTools.self) { _ in
             .init(tools: [
                 Tool(
-                    name: "list_capabilities",
-                    title: "List capabilities",
-                    description: "List the safe brokered capabilities available to the local agent. This never returns raw secret names or values.",
+                    name: "list_policies",
+                    title: "List policies",
+                    description: "List the safe brokered policies available to the local agent. This never returns raw secret names or values.",
                     inputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([:])
@@ -39,25 +39,25 @@ struct AegisSecretMCPEntryPoint {
                     outputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([
-                            "capabilities": .object([
+                            "policies": .object([
                                 "type": .string("array")
                             ])
                         ])
                     ])
                 ),
                 Tool(
-                    name: "probe_capability",
-                    title: "Probe capability",
-                    description: "Check whether a configured capability exists locally and whether its backing Keychain secret is available.",
+                    name: "probe_policy",
+                    title: "Probe policy",
+                    description: "Check whether a configured policy exists locally and whether its backing Keychain secret is available.",
                     inputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([
-                            "capability": .object([
+                            "policy": .object([
                                 "type": .string("string"),
-                                "description": .string("Capability name to probe.")
+                                "description": .string("Policy name to probe.")
                             ])
                         ]),
-                        "required": .array([.string("capability")])
+                        "required": .array([.string("policy")])
                     ]),
                     outputSchema: .object([
                         "type": .string("object"),
@@ -70,13 +70,13 @@ struct AegisSecretMCPEntryPoint {
                 Tool(
                     name: "http_request",
                     title: "HTTP request",
-                    description: "Send an authenticated HTTP request through a named local capability. The secret never leaves the local broker.",
+                    description: "Send an authenticated HTTP request through a named local policy. The secret never leaves the local broker.",
                     inputSchema: .object([
                         "type": .string("object"),
                         "properties": .object([
-                            "capability": .object([
+                            "policy": .object([
                                 "type": .string("string"),
-                                "description": .string("Capability name to use.")
+                                "description": .string("Policy name to use.")
                             ]),
                             "method": .object([
                                 "type": .string("string"),
@@ -84,11 +84,11 @@ struct AegisSecretMCPEntryPoint {
                             ]),
                             "path": .object([
                                 "type": .string("string"),
-                                "description": .string("Optional relative path under the capability base URL.")
+                                "description": .string("Optional relative path under the policy base URL.")
                             ]),
                             "url": .object([
                                 "type": .string("string"),
-                                "description": .string("Optional absolute URL. It must still match the capability policy.")
+                                "description": .string("Optional absolute URL. It must still match the policy.")
                             ]),
                             "headers": .object([
                                 "type": .string("object"),
@@ -103,7 +103,7 @@ struct AegisSecretMCPEntryPoint {
                             ])
                         ]),
                         "required": .array([
-                            .string("capability"),
+                            .string("policy"),
                             .string("method")
                         ])
                     ]),
@@ -119,26 +119,50 @@ struct AegisSecretMCPEntryPoint {
                         ])
                     ])
                 )
+                ,
+                Tool(
+                    name: "list_capabilities",
+                    title: "List capabilities (legacy alias)",
+                    description: "Legacy alias for list_policies.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([:])
+                    ])
+                ),
+                Tool(
+                    name: "probe_capability",
+                    title: "Probe capability (legacy alias)",
+                    description: "Legacy alias for probe_policy.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "capability": .object([
+                                "type": .string("string")
+                            ])
+                        ]),
+                        "required": .array([.string("capability")])
+                    ])
+                )
             ])
         }
 
         await server.withMethodHandler(CallTool.self) { params in
             do {
                 switch params.name {
-                case "list_capabilities":
-                    return try successResult(["capabilities": capabilityStore.summaries()])
-                case "probe_capability":
-                    guard let capability = params.arguments?["capability"]?.stringValue else {
-                        return errorResult("Missing `capability`.")
+                case "list_policies", "list_capabilities":
+                    return try successResult(["policies": capabilityStore.summaries()])
+                case "probe_policy", "probe_capability":
+                    guard let policy = params.arguments?["policy"]?.stringValue ?? params.arguments?["capability"]?.stringValue else {
+                        return errorResult("Missing `policy`.")
                     }
-                    return try successResult(broker.probe(capability: capability))
+                    return try successResult(broker.probe(capability: policy))
                 case "http_request":
                     guard let arguments = params.arguments else {
                         return errorResult("Missing tool arguments.")
                     }
 
-                    guard let capability = arguments["capability"]?.stringValue else {
-                        return errorResult("Missing `capability`.")
+                    guard let policy = arguments["policy"]?.stringValue ?? arguments["capability"]?.stringValue else {
+                        return errorResult("Missing `policy`.")
                     }
                     guard let method = arguments["method"]?.stringValue else {
                         return errorResult("Missing `method`.")
@@ -148,7 +172,7 @@ struct AegisSecretMCPEntryPoint {
                     let body = try decodeBody(arguments["body"])
                     let requester = arguments["requester"]?.stringValue ?? ProcessInfo.processInfo.environment["AEGIS_SECRET_AGENT_NAME"] ?? "MCP client"
                     let response = try await broker.request(
-                        capability: capability,
+                        capability: policy,
                         request: BrokerRequest(
                             method: method,
                             path: arguments["path"]?.stringValue,

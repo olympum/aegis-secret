@@ -82,10 +82,17 @@ final class AegisSecretCoreTests: XCTestCase {
         )
     }
 
-    func testCapabilityValidateFileParses() throws {
+    func testPolicyValidateFileParses() throws {
+        XCTAssertEqual(
+            try CommandParser().parse(["policy", "validate", "--file", "/tmp/policies.json"], stdinIsTTY: true),
+            .policy(.validateFile(path: "/tmp/policies.json"))
+        )
+    }
+
+    func testCapabilityAliasStillParses() throws {
         XCTAssertEqual(
             try CommandParser().parse(["capability", "validate", "--file", "/tmp/capabilities.json"], stdinIsTTY: true),
-            .capability(.validateFile(path: "/tmp/capabilities.json"))
+            .policy(.validateFile(path: "/tmp/capabilities.json"))
         )
     }
 
