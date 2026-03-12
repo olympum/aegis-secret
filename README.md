@@ -60,79 +60,6 @@ That means an agent can discover which local tools Aegis allows and then ask
 Aegis to run one of them. It does not get `get_secret`, `set_secret`, or
 `delete_secret` over MCP.
 
-## Install
-
-### Binary Release
-
-Download the installer package from the
-[GitHub Releases page](https://github.com/olympum/aegis-secret/releases).
-
-1. Download `Aegis Secret-<version>-installer.pkg`
-2. Open the package and finish the installer
-
-The package installs:
-
-- `/Applications/Aegis Secret.app`
-- `/usr/local/bin/aegis-secret`
-- `/usr/local/bin/aegis-secret-mcp`
-
-The installer also makes a best-effort attempt to run:
-
-```bash
-aegis-secret install-user
-```
-
-That per-user setup step is what creates and refreshes:
-
-- `~/.config/aegis-secret/commands.base.json`
-- `~/.config/aegis-secret/commands.local.json`
-- user-scoped Claude MCP registration
-- user-scoped Codex MCP registration
-- the managed Aegis block in:
-  - `~/.claude/CLAUDE.md`
-  - `~/.codex/AGENTS.md`
-
-If that best-effort step did not run, or if you want to repair user setup
-later, run:
-
-```bash
-aegis-secret install-user
-```
-
-### Build From Source
-
-Source installs are for development and contributors.
-
-Store your Xcode team ID once:
-
-```bash
-mkdir -p ~/.config/aegis-secret
-cat > ~/.config/aegis-secret/install.env <<'EOF'
-AEGIS_SECRET_TEAM_ID=YOURTEAMID
-EOF
-```
-
-If you want Xcode.app builds to work without editing the project file, create a
-repo-local signing override once:
-
-```bash
-cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig
-```
-
-Then set your team ID in `Config/Signing.local.xcconfig`. That file is
-gitignored.
-
-Then install:
-
-```bash
-git clone https://github.com/olympum/aegis-secret.git
-cd aegis-secret
-./scripts/install-user-mcp.sh
-```
-
-The source installer builds a signed development app, installs it into
-`~/Applications/Aegis Secret.app`, and then runs `install-user`.
-
 ## Quick Start
 
 Store a secret:
@@ -162,29 +89,58 @@ Let an agent use the MCP server:
 3. the agent calls `run_command`
 4. you approve with Touch ID
 
-## What Changes On Disk
+## Install
 
-Aegis intentionally keeps its editable config visible under
-`~/.config/aegis-secret`.
+### Binary Release
 
-Managed by Aegis:
+Download the installer package from the
+[GitHub Releases page](https://github.com/olympum/aegis-secret/releases).
 
-- `commands.base.json`
-- the marked Aegis block inside `~/.claude/CLAUDE.md`
-- the marked Aegis block inside `~/.codex/AGENTS.md`
+1. Download `Aegis Secret-<version>-installer.pkg`
+2. Open the package and finish the installer
 
-User-owned:
+The package installs:
 
-- `commands.local.json`
-- the rest of `~/.claude/CLAUDE.md`
-- the rest of `~/.codex/AGENTS.md`
-- `install.env` if you build from source
+- `/Applications/Aegis Secret.app`
+- `/usr/local/bin/aegis-secret`
+- `/usr/local/bin/aegis-secret-mcp`
 
-The model is similar to a distro-managed base config plus a user overlay:
+The installer also makes a best-effort attempt to run:
 
-- Aegis replaces `commands.base.json` on install and upgrade
-- you edit `commands.local.json`
-- the effective wrapped-command set is base plus local overlay
+```bash
+aegis-secret install-user
+```
+
+That per-user setup step is what creates and refreshes:
+
+- `~/.config/aegis-secret/commands.base.json`
+  This is the managed base config. Aegis replaces it on install and upgrade with
+  the shipped default wrapped commands such as `gh`, `aws`, and `gcloud`.
+- `~/.config/aegis-secret/commands.local.json`
+  This is the user-owned overlay. Aegis creates it if missing, but does not
+  overwrite your edits. Use it to disable shipped commands, override defaults,
+  or add new wrapped commands.
+- user-scoped Claude MCP registration
+  Aegis registers itself as a Claude MCP server in the current user account, so
+  new Claude sessions can discover `list_commands` and `run_command` in every
+  project.
+- user-scoped Codex MCP registration
+  Aegis registers itself as a Codex MCP server in the current user account, so
+  Codex can use the same wrapped-command tools without extra per-repo setup.
+- the managed Aegis block in:
+  - `~/.claude/CLAUDE.md`
+    Aegis updates only its marked block there, telling Claude to prefer
+    `list_commands` and `run_command` for wrapped tools.
+  - `~/.codex/AGENTS.md`
+    Aegis updates only its marked block there, telling Codex to prefer
+    `list_commands` and `run_command` for wrapped tools.
+
+If that best-effort step did not run, or if you want to repair user setup
+later, run:
+
+```bash
+aegis-secret install-user
+```
 
 ## Default Wrapped Commands
 
@@ -193,10 +149,6 @@ Out of the box, Aegis ships wrappers for:
 - `gh`
 - `aws`
 - `gcloud`
-
-Those defaults live in:
-
-- `~/.config/aegis-secret/commands.base.json`
 
 The shipped defaults are permissive enough to work out of the box, but include
 obvious deny rules for credential and auth-management paths.
@@ -213,13 +165,7 @@ configured, Aegis will not run `kubectl` over MCP.
 
 ## Customizing Wrapped Commands
 
-Edit:
-
-- `~/.config/aegis-secret/commands.local.json`
-
-Start from [`examples/commands.example.json`](examples/commands.example.json).
-
-Example:
+Example custom `~/.config/aegis-secret/commands.local.json`:
 
 ```json
 {
@@ -325,3 +271,37 @@ If you change install or MCP behavior, also smoke test:
 codex mcp list
 claude mcp list
 ```
+
+### Build From Source
+
+Source installs are for development and contributors.
+
+Store your Xcode team ID once:
+
+```bash
+mkdir -p ~/.config/aegis-secret
+cat > ~/.config/aegis-secret/install.env <<'EOF'
+AEGIS_SECRET_TEAM_ID=YOURTEAMID
+EOF
+```
+
+If you want Xcode.app builds to work without editing the project file, create a
+repo-local signing override once:
+
+```bash
+cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig
+```
+
+Then set your team ID in `Config/Signing.local.xcconfig`. That file is
+gitignored.
+
+Then install:
+
+```bash
+git clone https://github.com/olympum/aegis-secret.git
+cd aegis-secret
+./scripts/install-user-mcp.sh
+```
+
+The source installer builds a signed development app, installs it into
+`~/Applications/Aegis Secret.app`, and then runs `install-user`.
