@@ -1,0 +1,21 @@
+{
+  "capabilities": [
+    {
+      "name": "openai-api",
+      "description": "OpenAI API requests through the local broker",
+      "secret_key": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com",
+      "allowed_methods": [
+        "GET",
+        "POST"
+      ],
+      "auth_mode": "bearer",
+      "allowed_path_prefixes": [
+        "/v1"
+      ],
+      "default_headers": {
+        "Accept": "application/json"
+      }
+    }
+  ]
+}
