@@ -59,6 +59,21 @@ codex mcp get aegis-secret
 claude mcp list
 ```
 
+For install-flow changes, also verify the visible user-managed files:
+
+```bash
+ls ~/.config/aegis-secret
+sed -n '1,120p' ~/.claude/CLAUDE.md
+sed -n '1,120p' ~/.codex/AGENTS.md
+```
+
+The installer is expected to:
+
+- refresh `~/.config/aegis-secret/commands.base.json`
+- create `~/.config/aegis-secret/commands.local.json` if missing
+- register user-scoped Claude and Codex MCP servers when those CLIs are installed
+- update only the marked Aegis block inside `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`
+
 If the installer reports a missing provisioning profile, open `Aegis Secret.xcodeproj`
 in Xcode, choose your paid team in Signing & Capabilities, build once, and rerun
 the installer.
@@ -74,6 +89,7 @@ For release work, follow [RELEASING.md](RELEASING.md).
 - Do not add MCP tools that return raw secret values.
 - Keep the default agent path command-based rather than secret-text-based.
 - Prefer wrapped-command mediation over shell execution or generic prompt conventions.
+- Keep the visible config model simple: managed base plus user-local overlay.
 
 ## Commit Policy
 

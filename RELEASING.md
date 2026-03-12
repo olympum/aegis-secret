@@ -7,7 +7,8 @@ Store.
 
 The release artifact should let users download a signed Aegis Secret app from
 GitHub, install it locally, and get the same biometric-only Keychain behavior as
-source installs.
+source installs, with the same wrapped-command MCP experience for Claude and
+Codex.
 
 ## Distribution Model
 
@@ -17,6 +18,10 @@ Recommended v1 release format:
 - detached checksum file such as `SHA256SUMS`
 - signed installer that places the app in `/Applications` and PATH shims in
   `/usr/local/bin`
+
+The package should also trigger the per-user `install-user` flow on the active
+console user as a best effort, so user-scoped MCP registration and managed
+guidance are refreshed automatically.
 
 GitHub Releases is an appropriate place to host these assets. Apple is still
 required for code signing and notarization.
@@ -140,6 +145,11 @@ Before publishing a release:
 - The app builds in Release mode.
 - `aegis-secret list` works from the installed app wrapper.
 - A wrapped command completes with exactly one Touch ID prompt after approval-cache expiry.
+- The installer refreshes `~/.config/aegis-secret/commands.base.json`.
+- The installer creates `~/.config/aegis-secret/commands.local.json` if missing.
+- The installer refreshes the managed Aegis block in `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
+- `claude mcp list` shows `aegis-secret` connected after install.
+- `codex mcp list` shows `aegis-secret` enabled after install.
 - `spctl --assess --type execute` accepts the stapled app.
 - `spctl --assess --type install` accepts the stapled package.
 - The GitHub release notes include install steps and the checksum file.

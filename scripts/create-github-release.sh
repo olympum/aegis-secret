@@ -56,7 +56,7 @@ Aegis Secret $VERSION is the first public binary release.
 What's included:
 - Notarized macOS installer package
 - Signed app bundle with Touch ID-gated command access
-- Local MCP server for running wrapped commands without shelling out through the agent
+- Local MCP server for running wrapped commands such as \`gh\`, \`aws\`, and \`gcloud\`
 - CLI for storing secrets and managing wrapped commands
 
 Install:
@@ -65,7 +65,12 @@ Install:
 
 The installer places \`Aegis Secret.app\` in \`/Applications\`, installs
 \`aegis-secret\` and \`aegis-secret-mcp\` in \`/usr/local/bin\`, and makes a
-best-effort attempt to register MCP integration for Codex and Claude.
+best-effort attempt to:
+
+- register user-scoped MCP integration for Codex and Claude
+- refresh \`~/.config/aegis-secret/commands.base.json\`
+- create \`~/.config/aegis-secret/commands.local.json\` if needed
+- refresh the managed Aegis block in \`~/.claude/CLAUDE.md\` and \`~/.codex/AGENTS.md\`
 
 If you need to repair the per-user MCP registration later, run:
 
