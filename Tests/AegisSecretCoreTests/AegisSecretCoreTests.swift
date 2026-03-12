@@ -133,10 +133,13 @@ final class AegisSecretCoreTests: XCTestCase {
 
     func testCommandStoreUsesDefaultTemplateWhenMissing() throws {
         let tempDirectory = try temporaryDirectory()
-        let store = CommandStore(fileURL: tempDirectory.appendingPathComponent("commands.json"))
+        let store = CommandStore(
+            fileURL: tempDirectory.appendingPathComponent("commands.json"),
+            environment: [systemCommandsFileEnvironmentKey: tempDirectory.appendingPathComponent("system-commands.json").path]
+        )
 
         let names = try store.listCommands().map(\.name)
-        XCTAssertEqual(names, ["aws", "gcloud", "gh"])
+        XCTAssertEqual(names, ["aws", "az", "gcloud", "gh", "kubectl", "terraform"])
     }
 
     func testCommandStoreMergesSystemAndUserOverrides() throws {

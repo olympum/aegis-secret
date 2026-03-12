@@ -48,6 +48,59 @@
         ["config", "config-helper"]
       ],
       "deny_flags": ["--account", "--access-token-file"]
+    },
+    {
+      "name": "kubectl",
+      "command": "kubectl",
+      "description": "Kubernetes CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["apply"],
+        ["create"],
+        ["delete"],
+        ["patch"],
+        ["replace"],
+        ["edit"],
+        ["exec"],
+        ["cp"],
+        ["port-forward"]
+      ]
+    },
+    {
+      "name": "terraform",
+      "command": "terraform",
+      "description": "Terraform CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["apply"],
+        ["destroy"],
+        ["import"],
+        ["login"],
+        ["force-unlock"],
+        ["state"]
+      ]
+    },
+    {
+      "name": "az",
+      "command": "az",
+      "description": "Azure CLI",
+      "approval_window_seconds": 300,
+      "timeout_seconds": 30,
+      "max_output_bytes": 262144,
+      "deny_prefixes": [
+        ["login"],
+        ["account", "set"],
+        ["configure"],
+        ["deployment", "group", "create"],
+        ["deployment", "sub", "create"],
+        ["deployment", "mg", "create"],
+        ["deployment", "tenant", "create"]
+      ],
+      "deny_flags": ["--debug"]
     }
   ]
 }

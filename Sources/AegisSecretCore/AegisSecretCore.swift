@@ -485,6 +485,50 @@ public struct CommandFile: Codable, Equatable, Sendable {
                     denyPrefixes: [["auth"], ["config", "config-helper"]],
                     denyFlags: ["--account", "--access-token-file"]
                 ),
+                WrappedCommandConfig(
+                    name: "kubectl",
+                    command: "kubectl",
+                    description: "Kubernetes CLI",
+                    denyPrefixes: [
+                        ["apply"],
+                        ["create"],
+                        ["delete"],
+                        ["patch"],
+                        ["replace"],
+                        ["edit"],
+                        ["exec"],
+                        ["cp"],
+                        ["port-forward"]
+                    ]
+                ),
+                WrappedCommandConfig(
+                    name: "terraform",
+                    command: "terraform",
+                    description: "Terraform CLI",
+                    denyPrefixes: [
+                        ["apply"],
+                        ["destroy"],
+                        ["import"],
+                        ["login"],
+                        ["force-unlock"],
+                        ["state"]
+                    ]
+                ),
+                WrappedCommandConfig(
+                    name: "az",
+                    command: "az",
+                    description: "Azure CLI",
+                    denyPrefixes: [
+                        ["login"],
+                        ["account", "set"],
+                        ["configure"],
+                        ["deployment", "group", "create"],
+                        ["deployment", "sub", "create"],
+                        ["deployment", "mg", "create"],
+                        ["deployment", "tenant", "create"]
+                    ],
+                    denyFlags: ["--debug"]
+                ),
             ]
         )
     }

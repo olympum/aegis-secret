@@ -2,9 +2,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Aegis Secret allows agents to use local developer tools such as `gh`, `aws`, and
-`gcloud`, but without them freely shelling out to those tools and asking or using
-raw credentials.
+Aegis Secret allows agents to use local developer tools such as `gh`, `aws`,
+`gcloud`, `kubectl`, `terraform`, and `az`, but without them freely shelling
+out to those tools and asking or using raw credentials.
 
 Aegis sits between the agent and the local CLI:
 
@@ -19,6 +19,8 @@ tools already know how to authenticate themselves through existing local state:
 - `gh` may already be logged in
 - `aws` may already have SSO, profile, or role-based auth
 - `gcloud` may already have an active local login
+- `kubectl`, `terraform`, and `az` may already be configured locally for the
+  repo or machine
 
 The product model is intentionally simple:
 
@@ -32,6 +34,9 @@ Examples:
 - let an agent use `gh api /user`
 - let an agent use `aws sts get-caller-identity --output json`
 - let an agent use `gcloud projects list --format=json`
+- let an agent use `kubectl get pods -A -o json`
+- let an agent use `terraform show -json`
+- let an agent use `az account show --output json`
 
 ## What Aegis Does
 
@@ -149,6 +154,9 @@ Out of the box, Aegis ships wrappers for:
 - `gh`
 - `aws`
 - `gcloud`
+- `kubectl`
+- `terraform`
+- `az`
 
 The shipped defaults are permissive enough to work out of the box, but include
 obvious deny rules for credential and auth-management paths.
