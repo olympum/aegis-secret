@@ -117,14 +117,14 @@ This keeps adoption easy:
 Aegis uses two visible config files under `~/.config/aegis-secret`:
 
 - managed base file: `commands.base.json`
-- user override file: `commands.json`
+- local override file: `commands.local.json`
 
 The model is intentionally simple:
 
 - Aegis replaces `commands.base.json` on install and upgrade.
-- Users edit `commands.json`.
+- Users edit `commands.local.json`.
 - The effective wrapped-command set is `commands.base.json`, overlaid by
-  `commands.json`.
+  `commands.local.json`.
 
 The managed base file includes the shipped defaults for:
 
@@ -132,7 +132,7 @@ The managed base file includes the shipped defaults for:
 - `aws`
 - `gcloud`
 
-The user override file:
+The local override file:
 
 - can override shipped settings for a wrapped command
 - can disable a shipped wrapped command
@@ -149,7 +149,7 @@ needed. The user file starts empty:
 ```
 
 Start from [`examples/commands.example.json`](examples/commands.example.json)
-for a user override file:
+for a local override file:
 
 ```json
 {
