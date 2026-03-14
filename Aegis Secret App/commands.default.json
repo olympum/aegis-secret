@@ -47,7 +47,7 @@
         ["auth"],
         ["config", "config-helper"]
       ],
-      "deny_flags": ["--account", "--access-token-file"]
+      "deny_flags": ["--access-token-file"]
     },
     {
       "name": "kubectl",

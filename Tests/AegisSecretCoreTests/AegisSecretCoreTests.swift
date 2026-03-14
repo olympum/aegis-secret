@@ -271,6 +271,46 @@ final class AegisSecretCoreTests: XCTestCase {
         }
     }
 
+    func testRunnerAllowsGcloudAccountFlag() async throws {
+        let tempDirectory = try temporaryDirectory()
+        let executablePath = try makeExecutable(named: "gcloud", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")
+        let commandFile = tempDirectory.appendingPathComponent("commands.json")
+        try prettyJSON(
+            CommandFile(commands: [
+                WrappedCommandConfig(
+                    name: "gcloud",
+                    command: executablePath.path,
+                    denyPrefixes: [["auth"], ["config", "config-helper"]],
+                    denyFlags: ["--access-token-file"]
+                )
+            ])
+        ).write(to: commandFile)
+
+        let runner = WrappedCommandRunner(
+            commandStore: CommandStore(fileURL: commandFile),
+            authenticator: AuthRecorder(),
+            executor: MockCommandExecutor { request in
+                XCTAssertEqual(
+                    request.arguments,
+                    ["compute", "ssh", "vm-name", "--account=user@example.com"]
+                )
+                return RawCommandExecutionResult(
+                    stdout: Data("ok\n".utf8),
+                    stderr: Data(),
+                    exitCode: 0
+                )
+            }
+        )
+
+        let result = try await runner.run(
+            name: "gcloud",
+            args: ["compute", "ssh", "vm-name", "--account=user@example.com"],
+            requester: "Claude"
+        )
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "ok\n")
+    }
+
     func testRunnerRequiresApprovalOncePerWindow() async throws {
         let tempDirectory = try temporaryDirectory()
         let executablePath = try makeExecutable(named: "gh", in: tempDirectory, contents: "#!/bin/zsh\nexit 0\n")

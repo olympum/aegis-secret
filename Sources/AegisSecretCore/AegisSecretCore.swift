@@ -483,7 +483,7 @@ public struct CommandFile: Codable, Equatable, Sendable {
                     command: "gcloud",
                     description: "Google Cloud CLI",
                     denyPrefixes: [["auth"], ["config", "config-helper"]],
-                    denyFlags: ["--account", "--access-token-file"]
+                    denyFlags: ["--access-token-file"]
                 ),
                 WrappedCommandConfig(
                     name: "kubectl",
