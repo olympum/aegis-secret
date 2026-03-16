@@ -6,15 +6,80 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ci_relevant: ${{ steps.detect.outputs.ci_relevant }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect CI-relevant changes
+        id: detect
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_ref="${{ github.event.pull_request.base.sha }}"
+          else
+            base_ref="${{ github.event.before }}"
+          fi
+          head_ref="${{ github.sha }}"
+          python3 - <<'PY' "$base_ref" "$head_ref" >>"$GITHUB_OUTPUT"
+          import subprocess
+          import sys
+
+          base_ref, head_ref = sys.argv[1], sys.argv[2]
+          force_all = not base_ref or base_ref == "0000000000000000000000000000000000000000"
+          if force_all:
+              changed_files = subprocess.run(
+                  ["git", "ls-files"],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              ).stdout.splitlines()
+          else:
+              changed_files = subprocess.run(
+                  ["git", "diff", "--name-only", base_ref, head_ref],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              ).stdout.splitlines()
+
+          exact = {
+              ".github/workflows/ci.yml",
+              "Package.swift",
+          }
+          prefixes = (
+              "Sources/",
+              "Tests/",
+              "scripts/",
+          )
+
+          ci_relevant = any(path in exact or any(path.startswith(prefix) for prefix in prefixes) for path in changed_files)
+          print(f"ci_relevant={'true' if ci_relevant else 'false'}")
+          PY
+
   test:
+    needs:
+      - changes
     runs-on: macos-26
 
     steps:
+      - name: Note skipped Swift tests
+        if: needs.changes.outputs.ci_relevant != 'true'
+        run: echo "Skipping Swift tests because the change set is docs-only or CI-irrelevant."
+
       - name: Check out
+        if: needs.changes.outputs.ci_relevant == 'true'
         uses: actions/checkout@v5
 
       - name: Select latest stable Xcode
+        if: needs.changes.outputs.ci_relevant == 'true'
         run: |
           latest_xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode_*.app' ! -iname '*beta*' | sort -V | tail -1)"
           if [[ -z "$latest_xcode" ]]; then
@@ -29,7 +94,9 @@ jobs:
           xcodebuild -version
 
       - name: Show Swift version
+        if: needs.changes.outputs.ci_relevant == 'true'
         run: swift --version
 
       - name: Run tests
+        if: needs.changes.outputs.ci_relevant == 'true'
         run: swift test
