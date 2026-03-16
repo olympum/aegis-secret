@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${OLYMPUM_BYPASS_PRE_PUSH:-}" == "1" ]]; then
+  echo "[olympum-pre-push] bypass enabled via OLYMPUM_BYPASS_PRE_PUSH=1"
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "${repo_root}" ]]; then
+  exit 0
+fi
+
+repo_name="$(basename "${repo_root}")"
+gate_script="${repo_root}/scripts/ci_local.sh"
+
+if [[ ! -x "${gate_script}" ]]; then
+  if [[ -f "${gate_script}" ]]; then
+    chmod +x "${gate_script}"
+  else
+    echo "[olympum-pre-push] ${repo_name}: no local gate at ./scripts/ci_local.sh, skipping"
+    exit 0
+  fi
+fi
+
+start_ts="$(date +%s)"
+echo "[olympum-pre-push] ${repo_name}: running ./scripts/ci_local.sh"
+
+if ! (
+  cd "${repo_root}"
+  "${gate_script}"
+); then
+  end_ts="$(date +%s)"
+  elapsed="$((end_ts - start_ts))"
+  echo "[olympum-pre-push] ${repo_name}: ./scripts/ci_local.sh failed after ${elapsed}s"
+  echo "[olympum-pre-push] push blocked; re-run with OLYMPUM_BYPASS_PRE_PUSH=1 only for emergencies"
+  exit 1
+fi
+
+end_ts="$(date +%s)"
+elapsed="$((end_ts - start_ts))"
+echo "[olympum-pre-push] ${repo_name}: gate passed in ${elapsed}s"
