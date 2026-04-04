@@ -6,7 +6,7 @@ CONFIG_DIR="$HOME/.config/aegis-secret"
 INSTALL_ENV_FILE="$CONFIG_DIR/install.env"
 RELEASE_ENV_FILE="$CONFIG_DIR/release.env"
 DEFAULT_NOTARY_PROFILE="AegisSecretRelease"
-DEFAULT_GITHUB_REPOSITORY="olympum/aegis-secret"
+DEFAULT_GITHUB_REPOSITORY="mithran-hq/aegis-secret"
 
 load_release_env() {
   if [[ -f "$INSTALL_ENV_FILE" ]]; then
