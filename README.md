@@ -99,7 +99,7 @@ Let an agent use the MCP server:
 ### Binary Release
 
 Download the installer package from the
-[GitHub Releases page](https://github.com/olympum/aegis-secret/releases).
+[GitHub Releases page](https://github.com/mithran-hq/aegis-secret/releases).
 
 1. Download `Aegis Secret-<version>-installer.pkg`
 2. Open the package and finish the installer
@@ -310,7 +310,7 @@ gitignored.
 Then install:
 
 ```bash
-git clone https://github.com/olympum/aegis-secret.git
+git clone https://github.com/mithran-hq/aegis-secret.git
 cd aegis-secret
 ./scripts/install-user-mcp.sh
 ```
